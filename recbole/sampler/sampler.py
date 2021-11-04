@@ -407,7 +407,7 @@ class RepeatableSampler(AbstractSampler):
             item_id[len(user_ids) * (num - 1) + 1] is sampled for user_ids[1]; ...; and so on.
         """
         try:
-            self.used_ids = np.array([{i} for i in item_ids])
+            self.used_ids = np.array([set(i) if hasattr(i, '__iter__') else {i} for i in item_ids])
             return self.sample_by_key_ids(np.arange(len(user_ids)), num)
         except IndexError:
             for user_id in user_ids:

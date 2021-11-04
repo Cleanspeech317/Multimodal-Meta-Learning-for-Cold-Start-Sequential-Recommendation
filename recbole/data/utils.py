@@ -185,6 +185,7 @@ def get_dataloader(config, phase):
         'ENMF': _get_AE_dataloader,
         'RaCT': _get_AE_dataloader,
         'RecVAE': _get_AE_dataloader,
+        'PretrainRec': _get_pretrain_dataloader,
     }
 
     if config['model'] in register_table:
@@ -223,6 +224,18 @@ def _get_AE_dataloader(config, phase):
         elif eval_strategy == 'full':
             return FullSortEvalDataLoader
 
+
+def _get_pretrain_dataloader(config, phase):
+    if phase == 'train':
+        if config['train_stage'] == 'pretrain':
+            return PretrainRecDataLoader
+        return TrainDataLoader
+    else:
+        eval_strategy = config['eval_neg_sample_args']['strategy']
+        if eval_strategy in {'none', 'by'}:
+            return NegSampleEvalDataLoader
+        elif eval_strategy == 'full':
+            return FullSortEvalDataLoader
 
 def create_samplers(config, dataset, built_datasets):
     """Create sampler for training, validation and testing.

@@ -1780,7 +1780,7 @@ class Dataset(object):
             if ftype == FeatureType.TOKEN:
                 new_data[k] = torch.LongTensor(value)
             elif ftype == FeatureType.FLOAT:
-                new_data[k] = torch.FloatTensor(value)
+                new_data[k] = torch.FloatTensor(value) if k != self.time_field else torch.tensor(value)
             elif ftype == FeatureType.TOKEN_SEQ:
                 seq_data = [torch.LongTensor(d[:self.field2seqlen[k]]) for d in value]
                 new_data[k] = rnn_utils.pad_sequence(seq_data, batch_first=True)

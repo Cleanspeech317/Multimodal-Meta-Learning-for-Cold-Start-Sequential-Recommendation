@@ -22,7 +22,7 @@ import torch
 from recbole.data.dataset import KGSeqDataset, SequentialDataset
 from recbole.data.interaction import Interaction
 from recbole.sampler import SeqSampler
-from recbole.utils.enum_type import FeatureType
+from recbole.utils.enum_type import FeatureType, FeatureSource
 
 
 class GRU4RecKGDataset(KGSeqDataset):
@@ -133,3 +133,44 @@ class DIENDataset(SequentialDataset):
 
         new_data.update(Interaction(new_dict))
         self.inter_feat = new_data
+
+
+class PretrainRecDataset(SequentialDataset):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def _get_field_from_config(self):
+        super()._get_field_from_config()
+        self.feature_field = self.config['feature_field']
+        self.candidate_feature_list = self.config['candidate_feature_list']
+
+    def _data_processing(self):
+        super()._data_processing()
+        self._construct_feature_field()
+
+    def _construct_feature_field(self):
+        feature_list = []
+        length = len(self.inter_feat)
+        for field in self.candidate_feature_list:
+            if field not in self.inter_feat:
+                self.logger.warning(f'field [{field}] is not in `inter_feat`, '
+                                    f'it will not used for construct `{self.feature_field}`.')
+                continue
+            ftype = self.field2type[field]
+            if ftype != FeatureType.TOKEN and ftype != FeatureType.TOKEN_SEQ:
+                self.logger.warning(f'field [{field}] is not token-like field, '
+                                    f'it will not used for construct `{self.feature_field}`.')
+                continue
+            feature = np.zeros((length, self.num(field)), dtype=np.float32)
+            field_values = self.inter_feat[field].values
+            if ftype == FeatureType.TOKEN:
+                feature[np.arange(length), field_values] = 1.0
+            else:
+                for i, v in enumerate(field_values):
+                    feature[np.full_like(v, i), v] = 1.0
+            feature_list.append(feature[:, 1:])
+        feature_list = np.concatenate(feature_list, axis=-1)
+        self.set_field_property(
+            self.feature_field, FeatureType.FLOAT_SEQ, FeatureSource.INTERACTION, feature_list.shape[-1]
+        )
+        self.inter_feat[self.feature_field] = list(feature_list)

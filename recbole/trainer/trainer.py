@@ -640,6 +640,25 @@ class MKRTrainer(Trainer):
         return rs_total_loss, kg_total_loss
 
 
+class PretrainRecTrainer(PretrainTrainer):
+    r"""PretrainRecTrainer is designed for PretrainRecTrainer,
+    which is a self-supervised learning based sequential recommenders.
+    It includes two training stages: pre-training ang fine-tuning.
+
+    """
+
+    def __init__(self, config, model):
+        super(PretrainRecTrainer, self).__init__(config, model)
+
+    def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
+        if self.model.train_stage == 'pretrain':
+            return self.pretrain(train_data, verbose, show_progress)
+        elif self.model.train_stage == 'finetune':
+            return super().fit(train_data, valid_data, verbose, saved, show_progress, callback_fn)
+        else:
+            raise ValueError("Please make sure that the 'train_stage' is 'pretrain' or 'finetune'!")
+
+
 class TraditionalTrainer(Trainer):
     r"""TraditionalTrainer is designed for Traditional model(Pop,ItemKNN), which set the epoch to 1 whatever the config.
 
