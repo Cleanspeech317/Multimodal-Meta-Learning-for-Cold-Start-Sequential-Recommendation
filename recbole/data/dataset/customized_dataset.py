@@ -141,6 +141,7 @@ class PretrainRecDataset(SequentialDataset):
 
     def _get_field_from_config(self):
         super()._get_field_from_config()
+        self.seq_id_field = self.config['SEQ_ID_FIELD']
         self.feature_field = self.config['feature_field']
         self.candidate_feature_list = self.config['candidate_feature_list']
 
@@ -174,3 +175,66 @@ class PretrainRecDataset(SequentialDataset):
             self.feature_field, FeatureType.FLOAT_SEQ, FeatureSource.INTERACTION, feature_list.shape[-1]
         )
         self.inter_feat[self.feature_field] = list(feature_list)
+
+    def data_augmentation(self):
+        """Augmentation processing for sequential dataset.
+
+        E.g., ``u1`` has purchase sequence ``<i1, i2, i3, i4>``,
+        then after augmentation, we will generate three cases.
+
+        ``u1, <i1> | i2``
+
+        (Which means given user_id ``u1`` and item_seq ``<i1>``,
+        we need to predict the next item ``i2``.)
+
+        The other cases are below:
+
+        ``u1, <i1, i2> | i3``
+
+        ``u1, <i1, i2, i3> | i4``
+        """
+        self.logger.debug('data_augmentation')
+
+        self._aug_presets()
+
+        self._check_field('uid_field', 'time_field')
+        max_item_list_len = self.config['MAX_ITEM_LIST_LENGTH']
+        self.sort(by=[self.uid_field, self.time_field], ascending=True)
+        last_uid = None
+        item_list_index, target_index, item_list_length = [], [], []
+        seq_start = 0
+        for i, uid in enumerate(self.inter_feat[self.uid_field].numpy()):
+            if last_uid != uid:
+                last_uid = uid
+                seq_start = i
+            else:
+                if i - seq_start > max_item_list_len:
+                    seq_start += 1
+                item_list_index.append(slice(seq_start, i))
+                target_index.append(i)
+                item_list_length.append(i - seq_start)
+
+        item_list_index = np.array(item_list_index)
+        target_index = np.array(target_index)
+        item_list_length = np.array(item_list_length, dtype=np.int64)
+
+        new_length = len(item_list_index)
+        new_data = self.inter_feat[target_index]
+        new_dict = {
+            self.seq_id_field: torch.arange(len(item_list_length)),
+            self.item_list_length_field: torch.tensor(item_list_length),
+        }
+
+        for field in self.inter_feat:
+            if field != self.uid_field:
+                list_field = getattr(self, f'{field}_list_field')
+                list_len = self.field2seqlen[list_field]
+                shape = (new_length, list_len) if isinstance(list_len, int) else (new_length,) + list_len
+                new_dict[list_field] = torch.zeros(shape, dtype=self.inter_feat[field].dtype)
+
+                value = self.inter_feat[field]
+                for i, (index, length) in enumerate(zip(item_list_index, item_list_length)):
+                    new_dict[list_field][i][:length] = value[index]
+
+        new_data.update(Interaction(new_dict))
+        self.inter_feat = new_data

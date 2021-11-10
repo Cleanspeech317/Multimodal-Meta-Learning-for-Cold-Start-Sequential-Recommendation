@@ -472,3 +472,144 @@ class SeqSampler(AbstractSampler):
             check_list = check_list[check_index]
 
         return torch.tensor(value_ids)
+
+
+class PretrainSampler(AbstractSampler):
+
+    def __init__(self, phases, dataset, datasets, distribution='uniform'):
+        if not isinstance(phases, list):
+            phases = [phases]
+        self.phases = phases
+        self.datasets = datasets
+
+        self.sid_field = dataset.config['SEQ_ID_FIELD']
+        self.iid_field = dataset.iid_field
+        self.iid_list_field = self.iid_field + dataset.config['LIST_SUFFIX']
+        self.item_list_length_field = dataset.item_list_length_field
+        self.user_num = dataset.user_num
+        self.item_num = dataset.item_num
+        self.inter_num = dataset.inter_num
+
+        super().__init__(distribution=distribution)
+
+    def _uni_sampling(self, sample_num):
+        return np.random.randint(1, self.item_num, sample_num)
+
+    def _get_candidates_list(self):
+        raise NotImplementedError('[_get_candidates_list] is not implemented for `PretrainSampler`!')
+
+    def get_used_ids(self):
+        """
+        Returns:
+            dict: Used item_ids is the same as positive item_ids.
+            Key is phase, and value is a numpy.ndarray which index is user_id, and element is a set of item_ids.
+        """
+        train = np.array([None for _ in range(self.inter_num)])
+        for sid, iid_list, iid_list_len in zip(self.datasets[0].inter_feat[self.sid_field].numpy(),
+                                               self.datasets[0].inter_feat[self.iid_list_field].numpy(),
+                                               self.datasets[0].inter_feat[self.item_list_length_field].numpy()):
+            train[sid] = np.unique(iid_list[:iid_list_len])
+
+        valid = np.zeros(self.inter_num, dtype=np.int64)
+        for sid, iid in zip(self.datasets[1].inter_feat[self.sid_field].numpy(),
+                            self.datasets[1].inter_feat[self.iid_field].numpy()):
+            valid[sid] = iid
+
+        test = np.zeros(self.inter_num, dtype=np.int64)
+        for sid, iid in zip(self.datasets[2].inter_feat[self.sid_field].numpy(),
+                            self.datasets[2].inter_feat[self.iid_field].numpy()):
+            test[sid] = iid
+
+        used_item_id = {
+            self.phases[0]: train,
+            self.phases[1]: valid,
+            self.phases[2]: test,
+        }
+
+        return used_item_id
+
+    def sample_by_seq_ids(self, seq_ids, num):
+        """Sampling by user_ids.
+
+        Args:
+            seq_ids (numpy.ndarray or list): Input user_ids.
+            num (int): Number of sampled item_ids for each user_id.
+
+        Returns:
+            torch.tensor: Sampled item_ids.
+            item_ids[0], item_ids[len(user_ids)], item_ids[len(user_ids) * 2], ..., item_id[len(user_ids) * (num - 1)]
+            is sampled for user_ids[0];
+            item_ids[1], item_ids[len(user_ids) + 1], item_ids[len(user_ids) * 2 + 1], ...,
+            item_id[len(user_ids) * (num - 1) + 1] is sampled for user_ids[1]; ...; and so on.
+        """
+        if self.phase == self.phases[0]:
+            used = self.used_ids[seq_ids]
+            value_ids = self.sampling(num)
+            check_list = np.arange(num)[my_isin(value_ids, used)]
+            while len(check_list) > 0:
+                value_ids[check_list] = value = self.sampling(len(check_list))
+                mask = my_isin(value, used)
+                check_list = check_list[mask]
+        else:  # TODO these codes need to be checked
+            key_ids = np.array(seq_ids)
+            key_num = len(key_ids)
+            total_num = key_num * num
+            value_ids = np.zeros(total_num, dtype=np.int64)
+            check_list = np.arange(total_num)
+            key_ids = np.tile(key_ids, num)
+            while len(check_list) > 0:
+                value_ids[check_list] = self.sampling(len(check_list))
+                check_list = np.array([
+                    i for i, used, v in zip(check_list, self.used_ids[key_ids[check_list]], value_ids[check_list])
+                    if v == used
+                ])
+
+        return torch.from_numpy(value_ids)
+
+    def set_phase(self, phase):
+        """Get the sampler of corresponding phase.
+
+        Args:
+            phase (str): The phase of new sampler.
+
+        Returns:
+            Sampler: the copy of this sampler, and :attr:`phase` is set the same as input phase.
+        """
+        if phase not in self.phases:
+            raise ValueError(f'Phase [{phase}] not exist.')
+        new_sampler = copy.copy(self)
+        new_sampler.phase = phase
+        new_sampler.used_ids = new_sampler.used_ids[phase]
+        return new_sampler
+
+
+def my_isin(ar1, ar2):
+    if len(ar2) < 10 * len(ar1) ** 0.145:
+        m = np.zeros(len(ar1), dtype=bool)
+        for a in ar2:
+            m |= (ar1 == a)
+        return m
+
+    ar1, rev_idx = my_unique_with_inverse(ar1)
+    ar = np.concatenate((ar1, ar2))
+    order = ar.argsort(kind='mergesort')
+    sar = ar[order]
+    bool_ar = (sar[1:] == sar[:-1])
+    flag = np.concatenate((bool_ar, [False]))
+    ret = np.empty(ar.shape, dtype=bool)
+    ret[order] = flag
+
+    return ret[rev_idx]
+
+
+def my_unique_with_inverse(ar):
+    perm = ar.argsort(kind='quicksort')
+    aux = ar[perm]
+    mask = np.empty(aux.shape, dtype=np.bool_)
+    mask[:1] = True
+    mask[1:] = aux[1:] != aux[:-1]
+
+    imask = np.cumsum(mask) - 1
+    inv_idx = np.empty(mask.shape, dtype=np.intp)
+    inv_idx[perm] = imask
+    return aux[mask], inv_idx

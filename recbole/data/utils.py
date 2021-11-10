@@ -18,7 +18,7 @@ import os
 import pickle
 
 from recbole.data.dataloader import *
-from recbole.sampler import KGSampler, Sampler, RepeatableSampler
+from recbole.sampler import KGSampler, Sampler, RepeatableSampler, PretrainSampler
 from recbole.utils import ModelType, ensure_dir, get_local_time, set_color
 from recbole.utils.argument_list import dataset_arguments
 
@@ -259,7 +259,9 @@ def create_samplers(config, dataset, built_datasets):
     train_sampler, valid_sampler, test_sampler = None, None, None
 
     if train_neg_sample_args['strategy'] != 'none':
-        if not config['repeatable']:
+        if config['model'] == 'PretrainRec' and config['train_stage'] == 'pretrain':
+            sampler = PretrainSampler(phases, dataset, built_datasets, train_neg_sample_args['distribution'])
+        elif not config['repeatable']:
             sampler = Sampler(phases, built_datasets, train_neg_sample_args['distribution'])
         else:
             sampler = RepeatableSampler(phases, dataset, train_neg_sample_args['distribution'])
