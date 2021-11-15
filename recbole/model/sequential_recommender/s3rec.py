@@ -256,13 +256,13 @@ class S3Rec(SequentialRecommender):
         sequence = [0] * pad_len + sequence
         return sequence
 
-    def reconstruct_pretrain_data(self, item_seq, item_seq_len):
+    def reconstruct_pretrain_data(self, item_seq, item_seq_len, item_feature_seq):
         """Generate pre-training data for the pre-training stage."""
         device = item_seq.device
         batch_size = item_seq.size(0)
 
         # We don't need padding for features
-        item_feature_seq = self.item_feat[self.FEATURE_FIELD][item_seq] - 1
+        item_feature_seq = item_feature_seq - 1
 
         end_index = item_seq_len.cpu().numpy().tolist()
         item_seq = item_seq.cpu().numpy().tolist()
@@ -353,7 +353,7 @@ class S3Rec(SequentialRecommender):
         if self.train_stage == 'pretrain':
             features, masked_item_sequence, pos_items, neg_items, \
             masked_segment_sequence, pos_segment, neg_segment \
-                = self.reconstruct_pretrain_data(item_seq, item_seq_len)
+                = self.reconstruct_pretrain_data(item_seq, item_seq_len, interaction[self.FEATURE_LIST])
 
             loss = self.pretrain(
                 features, masked_item_sequence, pos_items, neg_items, masked_segment_sequence, pos_segment, neg_segment
