@@ -13,6 +13,8 @@ import torch
 from recbole.data.interaction import Interaction
 from recbole.data.dataloader.abstract_dataloader import AbstractDataLoader
 
+from multiprocessing import Manager, Pool, cpu_count
+
 
 class PretrainRecDataLoader(AbstractDataLoader):
     """
@@ -52,6 +54,9 @@ class PretrainRecDataLoader(AbstractDataLoader):
         self.pos_segment_field = config['POS_SEGMENT_FIELD']
         self.neg_segment_field = config['NEG_SEGMENT_FIELD']
 
+        self.manager = Manager()
+        self.num_workers = config['num_workers'] or cpu_count()
+        self.pool = Pool(processes=self.num_workers)
         self.data = None
         super().__init__(config, dataset, sampler, shuffle=shuffle)
 
@@ -65,44 +70,41 @@ class PretrainRecDataLoader(AbstractDataLoader):
             self._shuffle()
 
         seq_ids = self.dataset.inter_feat[self.sid_field].numpy()
-        item_sequence = self.dataset.inter_feat[self.iid_list_field]
-        item_sequence_length = self.dataset.inter_feat[self.item_list_length_field]
+        item_seq = self.dataset.inter_feat[self.iid_list_field]
+        item_seq_len = self.dataset.inter_feat[self.item_list_length_field]
 
-        mask = (torch.rand(item_sequence.shape) < self.mask_ratio) & (item_sequence != 0)
-        mask_item_sequence = torch.where(mask, self.mask_token, item_sequence)
-        neg_item_sequence = item_sequence.clone()
+        result_dict = self.manager.dict()
+        result_dict['seq_ids'] = seq_ids
+        result_dict['mask_token'] = self.mask_token
+        result_dict['sampler'] = self.sampler
+        result_dict['mask'] = mask = (torch.rand(item_seq.shape) < self.mask_ratio) & (item_seq != 0)
+        mask_item_seq = torch.where(mask, self.mask_token, item_seq)
+        result_dict['item_seq_len'] = item_seq_len
+        result_dict['neg_item_seq'] = item_seq.clone()
+        result_dict['mask_segment'] = item_seq.clone()
+        result_dict['pos_segment'] = torch.full_like(item_seq, self.mask_token)
+        result_dict['neg_segment'] = torch.full_like(item_seq, self.mask_token)
 
-        mask_segment = item_sequence.clone()
-        pos_segment = torch.full_like(item_sequence, self.mask_token)
-        neg_segment = torch.full_like(item_sequence, self.mask_token)
+        split_point = np.linspace(0, len(seq_ids), self.num_workers + 1).astype(np.int64)
+        args_list = [
+            (i, result_dict, split_point[i], split_point[i + 1])
+            for i in range(self.num_workers)
+        ]
 
-        for i, (seq_id, m, seg_length) in enumerate(zip(seq_ids, mask, item_sequence_length)):
-            seg_length = int(seg_length)
-            mask_num = m.sum().item()
-            sample_length = torch.randint(1, 1 + seg_length // 2, (1,)).item() if seg_length >= 2 else 0
-
-            neg_item_ids = self.sampler.sample_by_seq_ids(seq_id, mask_num + sample_length)
-
-            neg_item_sequence[i][m] = neg_item_ids[:mask_num]
-
-            if seg_length >= 2:
-                start_id = torch.randint(0, seg_length - sample_length + 1, (1,)).item()
-                pos_segment[i][start_id:start_id + sample_length] = mask_segment[i][start_id:start_id + sample_length]
-                neg_segment[i][start_id:start_id + sample_length] = neg_item_ids[mask_num:]
-                mask_segment[i][start_id:start_id + sample_length] = self.mask_token
+        self.pool.map(construct_data, args_list)
 
         data = {
-            self.item_list_length_field: item_sequence_length,
+            self.item_list_length_field: item_seq_len,
             self.time_list_field: self.dataset.inter_feat[self.time_list_field],
             self.location_list_field: self.dataset.inter_feat[self.location_list_field],
             self.feature_list_field: self.dataset.inter_feat[self.feature_list_field],
             self.mask_field: mask,
-            self.mask_iid_list_field: mask_item_sequence,
-            self.iid_list_field: item_sequence,
-            self.neg_iid_list_field: neg_item_sequence,
-            self.mask_segment_field: mask_segment,
-            self.pos_segment_field: pos_segment,
-            self.neg_segment_field: neg_segment,
+            self.mask_iid_list_field: mask_item_seq,
+            self.iid_list_field: item_seq,
+            self.neg_iid_list_field: result_dict['neg_item_seq'],
+            self.mask_segment_field: result_dict['mask_segment'],
+            self.pos_segment_field: result_dict['pos_segment'],
+            self.neg_segment_field: result_dict['neg_segment'],
         }
         self.data = Interaction(data)
 
@@ -119,3 +121,32 @@ class PretrainRecDataLoader(AbstractDataLoader):
         cur_data = self.data[self.pr:self.pr + self.step]
         self.pr += self.step
         return cur_data
+
+
+def construct_data(raw_data):
+    idx, result_dict, begin, end = raw_data
+    slc = slice(begin, end)
+    seq_ids = result_dict['seq_ids']
+    mask_token = result_dict['mask_token']
+    sampler = result_dict['sampler']
+    mask = result_dict['mask']
+    item_seq_len = result_dict['item_seq_len']
+    neg_item_seq = result_dict['neg_item_seq']
+    mask_segment = result_dict['mask_segment']
+    pos_segment = result_dict['pos_segment']
+    neg_segment = result_dict['neg_segment']
+
+    for i, seq_id, m, seg_length in zip(range(begin, end), seq_ids[slc], mask[slc], item_seq_len[slc]):
+        seg_length = int(seg_length)
+        mask_num = m.sum().item()
+        sample_length = torch.randint(1, 1 + seg_length // 2, (1,)).item() if seg_length >= 2 else 0
+
+        neg_item_ids = sampler.sample_by_seq_ids(seq_id, mask_num + sample_length)
+
+        neg_item_seq[i][m] = neg_item_ids[:mask_num]
+
+        if seg_length >= 2:
+            start_id = torch.randint(0, seg_length - sample_length + 1, (1,)).item()
+            pos_segment[i][start_id:start_id + sample_length] = mask_segment[i][start_id:start_id + sample_length]
+            neg_segment[i][start_id:start_id + sample_length] = neg_item_ids[mask_num:]
+            mask_segment[i][start_id:start_id + sample_length] = mask_token
