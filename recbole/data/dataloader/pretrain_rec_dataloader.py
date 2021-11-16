@@ -16,6 +16,9 @@ from recbole.data.dataloader.abstract_dataloader import AbstractDataLoader
 from multiprocessing import Manager, Pool, cpu_count
 
 
+global_sampler = None
+
+
 class PretrainRecDataLoader(AbstractDataLoader):
     """
 
@@ -54,6 +57,8 @@ class PretrainRecDataLoader(AbstractDataLoader):
         self.pos_segment_field = config['POS_SEGMENT_FIELD']
         self.neg_segment_field = config['NEG_SEGMENT_FIELD']
 
+        global global_sampler
+        global_sampler = sampler
         self.manager = Manager()
         self.num_workers = config['num_workers'] or cpu_count()
         self.pool = Pool(processes=self.num_workers)
@@ -76,7 +81,6 @@ class PretrainRecDataLoader(AbstractDataLoader):
         result_dict = self.manager.dict()
         result_dict['seq_ids'] = seq_ids
         result_dict['mask_token'] = self.mask_token
-        result_dict['sampler'] = self.sampler
         result_dict['mask'] = mask = (torch.rand(item_seq.shape) < self.mask_ratio) & (item_seq != 0)
         mask_item_seq = torch.where(mask, self.mask_token, item_seq)
         result_dict['item_seq_len'] = item_seq_len
@@ -87,7 +91,7 @@ class PretrainRecDataLoader(AbstractDataLoader):
 
         split_point = np.linspace(0, len(seq_ids), self.num_workers + 1).astype(np.int64)
         args_list = [
-            (i, result_dict, split_point[i], split_point[i + 1])
+            (result_dict, split_point[i], split_point[i + 1])
             for i in range(self.num_workers)
         ]
 
@@ -124,11 +128,10 @@ class PretrainRecDataLoader(AbstractDataLoader):
 
 
 def construct_data(raw_data):
-    idx, result_dict, begin, end = raw_data
+    result_dict, begin, end = raw_data
     slc = slice(begin, end)
     seq_ids = result_dict['seq_ids']
     mask_token = result_dict['mask_token']
-    sampler = result_dict['sampler']
     mask = result_dict['mask']
     item_seq_len = result_dict['item_seq_len']
     neg_item_seq = result_dict['neg_item_seq']
@@ -141,7 +144,7 @@ def construct_data(raw_data):
         mask_num = m.sum().item()
         sample_length = torch.randint(1, 1 + seg_length // 2, (1,)).item() if seg_length >= 2 else 0
 
-        neg_item_ids = sampler.sample_by_seq_ids(seq_id, mask_num + sample_length)
+        neg_item_ids = global_sampler.sample_by_seq_ids(seq_id, mask_num + sample_length)
 
         neg_item_seq[i][m] = neg_item_ids[:mask_num]
 
