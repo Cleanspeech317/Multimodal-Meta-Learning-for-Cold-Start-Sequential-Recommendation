@@ -16,9 +16,11 @@ from recbole.quick_start import objective_function
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--model', '-m', type=str, default='BPR', help='name of models')
     parser.add_argument('--config_files', type=str, default=None, help='fixed config files')
     parser.add_argument('--params_file', type=str, default=None, help='parameters file')
     parser.add_argument('--output_file', type=str, default='hyper_example.result', help='output file')
+    parser.add_argument('--hint', type=str, default='', help='hint for run_hyper')
     args, _ = parser.parse_known_args()
 
     # plz set algo='exhaustive' to use exhaustive search, in this case, max_evals is auto set
@@ -29,7 +31,15 @@ def main():
     hp.export_result(output_file=args.output_file)
     print('best params: ', hp.best_params)
     print('best result: ')
-    print(hp.params2result[hp.params2str(hp.best_params)])
+    result = hp.params2result[hp.params2str(hp.best_params)]
+    print(result)
+    try:
+        from mtjupyter_utils import remind
+        message = ' '.join([str(args.model), args.hint]) + '\n'
+        message += ' '.join(map(str, result['test_result'].values()))
+        remind(message)
+    except Exception as e:
+        pass
 
 
 if __name__ == '__main__':

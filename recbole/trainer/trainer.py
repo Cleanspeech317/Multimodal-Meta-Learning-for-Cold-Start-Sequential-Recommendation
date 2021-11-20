@@ -421,7 +421,7 @@ class Trainer(AbstractTrainer):
             show_progress (bool): Show the progress of evaluate epoch. Defaults to ``False``.
 
         Returns:
-            dict: eval result, key is the eval metric and value in the corresponding metric value.
+            collections.OrderedDict: eval result, key is the eval metric and value in the corresponding metric value.
         """
         if not eval_data:
             return
