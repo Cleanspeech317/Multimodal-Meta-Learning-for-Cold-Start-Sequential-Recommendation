@@ -681,6 +681,9 @@ class Dataset(object):
         user_inter_num_interval = self._parse_intervals_str(self.config['user_inter_num_interval'])
         item_inter_num_interval = self._parse_intervals_str(self.config['item_inter_num_interval'])
 
+        if user_inter_num_interval is None and item_inter_num_interval is None:
+            return
+
         user_inter_num = Counter(self.inter_feat[self.uid_field].values) if user_inter_num_interval else Counter()
         item_inter_num = Counter(self.inter_feat[self.iid_field].values) if item_inter_num_interval else Counter()
 
