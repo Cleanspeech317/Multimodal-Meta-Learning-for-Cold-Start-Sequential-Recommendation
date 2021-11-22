@@ -24,7 +24,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     # plz set algo='exhaustive' to use exhaustive search, in this case, max_evals is auto set
-    config_file_list = args.config_files.strip().split(' ') if args.config_files else None
+    config_file_list = args.config_files.strip().split(',') if args.config_files else None
     hp = HyperTuning(objective_function, algo='exhaustive',
                      params_file=args.params_file, fixed_config_file_list=config_file_list)
     hp.run()
@@ -50,4 +50,4 @@ if __name__ == '__main__':
             from mtjupyter_utils import remind
             remind(err)
         except Exception as e:
-            pass
+            raise err

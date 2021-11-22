@@ -24,7 +24,7 @@ if __name__ == '__main__':
 
         args, _ = parser.parse_known_args()
 
-        config_file_list = args.config_files.strip().split(' ') if args.config_files else None
+        config_file_list = args.config_files.strip().split(',') if args.config_files else None
         saved = (args.saved.lower() == 'true')
         result = run_recbole(model=args.model, dataset=args.dataset, config_file_list=config_file_list, saved=saved)
         try:
@@ -39,4 +39,4 @@ if __name__ == '__main__':
             from mtjupyter_utils import remind
             remind(str(err))
         except Exception as e:
-            pass
+            raise err
