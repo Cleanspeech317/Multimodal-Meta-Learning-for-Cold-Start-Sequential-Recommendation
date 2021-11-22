@@ -30,7 +30,7 @@ from recbole.utils import FeatureSource, FeatureType, get_local_time, set_color,
 from recbole.utils.url import decide_download, download_url, extract_zip, makedirs, rename_atomic_files
 
 
-class Dataset(object):
+class Dataset:
     """:class:`Dataset` stores the original dataset in memory.
     It provides many useful functions for data preprocessing, such as k-core data filtering and missing value
     imputation. Features are stored as :class:`pandas.DataFrame` inside :class:`~recbole.data.dataset.dataset.Dataset`.
@@ -1289,6 +1289,15 @@ class Dataset(object):
             info.append(set_color('The sparsity of the dataset', 'blue') + f': {self.sparsity * 100}%')
         info.append(set_color('Remain Fields', 'blue') + f': {list(self.field2type)}')
         return '\n'.join(info)
+
+    def __getstate__(self):
+        new_state = copy.copy(self.__dict__)
+        new_state.pop('logger')
+        return new_state
+
+    def __setstate__(self, state):
+        self.__dict__ = state
+        self.logger = getLogger()
 
     def copy(self, new_inter_feat):
         """Given a new interaction feature, return a new :class:`Dataset` object,

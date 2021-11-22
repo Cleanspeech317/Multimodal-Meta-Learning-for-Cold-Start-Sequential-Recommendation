@@ -78,6 +78,15 @@ class AbstractDataLoader:
             raise StopIteration()
         return self._next_batch_data()
 
+    def __getstate__(self):
+        new_state = copy.copy(self.__dict__)
+        new_state.pop('logger')
+        return new_state
+
+    def __setstate__(self, state):
+        self.__dict__ = state
+        self.logger = getLogger()
+
     @property
     def pr_end(self):
         """This property marks the end of dataloader.pr which is used in :meth:`__next__`."""
