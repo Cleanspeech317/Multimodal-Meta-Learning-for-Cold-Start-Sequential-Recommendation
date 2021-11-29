@@ -38,5 +38,6 @@ if __name__ == '__main__':
         try:
             from mtjupyter_utils import remind
             remind(str(err))
+            raise err
         except Exception as e:
             raise err

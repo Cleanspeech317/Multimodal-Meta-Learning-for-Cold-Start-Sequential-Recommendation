@@ -305,6 +305,8 @@ class Dataset:
             :obj:`~recbole.utils.enum_type.FeatureSource.ITEM_ID`
         """
         feat_path = os.path.join(dataset_path, f'{token}.{source.value}')
+        field = getattr(self, field_name, None)
+
         if os.path.isfile(feat_path):
             feat = self._load_feat(feat_path, source)
             self.logger.debug(f'[{source.value}] feature loaded successfully from [{feat_path}].')
@@ -312,11 +314,12 @@ class Dataset:
             feat = None
             self.logger.debug(f'[{feat_path}] not found, [{source.value}] features are not loaded.')
 
-        field = getattr(self, field_name, None)
         if feat is not None and field is None:
             raise ValueError(f'{field_name} must be exist if {source.value}_feat exist.')
         if feat is not None and field not in feat:
             raise ValueError(f'{field_name} must be loaded if {source.value}_feat is loaded.')
+        if feat is not None:
+            feat.drop_duplicates(subset=[field], keep='first', inplace=True)
 
         if field in self.field2source:
             self.field2source[field] = FeatureSource(source.value + '_id')
