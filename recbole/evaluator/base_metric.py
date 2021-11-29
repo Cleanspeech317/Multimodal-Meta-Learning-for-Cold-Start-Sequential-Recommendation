@@ -111,7 +111,7 @@ class LossMetric(AbstractMetric):
         preds = dataobject.get('rec.score')
         trues = dataobject.get('data.label')
 
-        return preds.squeeze().numpy(), trues.squeeze().numpy()
+        return preds.squeeze(-1).numpy(), trues.squeeze(-1).numpy()
 
     def output_metric(self, metric, dataobject):
         preds, trues = self.used_info(dataobject)
