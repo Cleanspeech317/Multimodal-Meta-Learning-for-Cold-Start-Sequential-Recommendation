@@ -807,15 +807,17 @@ class Dataset:
         val_intervals = [] if self.config['val_interval'] is None else self.config['val_interval']
         self.logger.debug(set_color('drop_by_value', 'blue') + f': val={val_intervals}')
 
-        for field in val_intervals:
+        for field, interval in val_intervals.items():
             if field not in self.field2type:
                 raise ValueError(f'Field [{field}] not defined in dataset.')
-            if self.field2type[field] not in {FeatureType.FLOAT, FeatureType.FLOAT_SEQ}:
-                raise ValueError(f'Field [{field}] is not float-like field in dataset, which can\'t be filter.')
 
-            field_val_interval = self._parse_intervals_str(val_intervals[field])
-            for feat in self.field2feats(field):
-                feat.drop(feat.index[~self._within_intervals(feat[field].values, field_val_interval)], inplace=True)
+            if self.field2type[field] in {FeatureType.FLOAT, FeatureType.FLOAT_SEQ}:
+                field_val_interval = self._parse_intervals_str(interval)
+                for feat in self.field2feats(field):
+                    feat.drop(feat.index[~self._within_intervals(feat[field].values, field_val_interval)], inplace=True)
+            else:  # token-like field
+                for feat in self.field2feats(field):
+                    feat.drop(feat.index[~feat[field].isin(interval)], inplace=True)
 
     def _reset_index(self):
         """Reset index for all feats in :attr:`feat_name_list`.
