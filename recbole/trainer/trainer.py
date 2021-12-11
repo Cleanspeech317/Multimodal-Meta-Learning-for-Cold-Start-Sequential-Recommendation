@@ -823,9 +823,6 @@ class DecisionTreeTrainer(AbstractTrainer):
                     if saved:
                         self.model.save_model(self.temp_best_file)
                         self._save_checkpoint(epoch_idx)
-                        update_output = set_color('Saving current best', 'blue') + ': %s' % self.saved_model_file
-                        if verbose:
-                            self.logger.info(update_output)
                     self.best_valid_result = valid_result
 
                 if stop_flag:
@@ -1249,6 +1246,9 @@ class MetaLearningTrainer(Trainer):
                 self.model.load_other_parameter(checkpoint.get('other_parameter'))
                 saved_model_file = f'{self.config["model"]}-task-{task}-{get_local_time()}.pth'
                 self.saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+                self.cur_step = 0
+                self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
+                self.best_valid_result = None
                 self.fit(train_data, valid_data=valid_data, verbose=verbose, saved=saved, show_progress=show_progress)
                 result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=show_progress)
                 self.logger.info(set_color('test result', 'yellow') + f': {result}')
