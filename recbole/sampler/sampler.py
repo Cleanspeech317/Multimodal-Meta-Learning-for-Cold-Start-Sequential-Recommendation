@@ -613,3 +613,49 @@ def my_unique_with_inverse(ar):
     inv_idx = np.empty(mask.shape, dtype=np.intp)
     inv_idx[perm] = imask
     return aux[mask], inv_idx
+
+
+class MetaSeqSampler(AbstractSampler):
+    def __init__(self, dataset, candidate_items, distribution='uniform'):
+        self.dataset = dataset
+        self.candidate_items = candidate_items
+
+        self.iid_field = dataset.iid_field
+        self.user_num = dataset.user_num
+        self.item_num = dataset.item_num
+
+        super().__init__(distribution=distribution)
+
+    def _uni_sampling(self, sample_num):
+        return np.random.choice(self.candidate_items, sample_num)
+
+    def _get_candidates_list(self):
+        return list(self.dataset.inter_feat[self.iid_field].numpy())
+
+    def get_used_ids(self):
+        pass
+
+    def sample_by_user_ids(self, user_ids, item_ids, num):
+        """Sampling by user_ids.
+
+        Args:
+            user_ids (numpy.ndarray or list): Input user_ids.
+            item_ids (numpy.ndarray or list): Input item_ids.
+            num (int): Number of sampled item_ids for each user_id.
+
+        Returns:
+            torch.tensor: Sampled item_ids.
+            item_ids[0], item_ids[len(user_ids)], item_ids[len(user_ids) * 2], ..., item_id[len(user_ids) * (num - 1)]
+            is sampled for user_ids[0];
+            item_ids[1], item_ids[len(user_ids) + 1], item_ids[len(user_ids) * 2 + 1], ...,
+            item_id[len(user_ids) * (num - 1) + 1] is sampled for user_ids[1]; ...; and so on.
+        """
+        user_num = len(user_ids)
+        total_num = user_num * num
+        neg_item_ids = np.zeros(total_num, dtype=np.int64)
+        check_list = np.arange(total_num)
+        item_ids = np.tile(item_ids, num)
+        while len(check_list) > 0:
+            neg_item_ids[check_list] = tmp = self.sampling(len(check_list))
+            check_list = check_list[item_ids[check_list] == tmp]
+        return torch.tensor(neg_item_ids)

@@ -16,8 +16,9 @@ r"""
 recbole.trainer.trainer
 ################################
 """
-
+import copy
 import os
+from collections import OrderedDict
 from logging import getLogger
 from time import time
 
@@ -107,33 +108,37 @@ class Trainer(AbstractTrainer):
         self.item_tensor = None
         self.tot_item_num = None
 
-    def _build_optimizer(self, params):
+    def _build_optimizer(self, params, **kwargs):
         r"""Init the Optimizer
 
         Returns:
             torch.optim: the optimizer
         """
-        if self.config['reg_weight'] and self.weight_decay and self.weight_decay * self.config['reg_weight'] > 0:
+        learner = kwargs.pop('learner', self.learner)
+        learning_rate = kwargs.pop('learning_rate', self.learning_rate)
+        weight_decay = kwargs.pop('weight_decay', self.weight_decay)
+
+        if self.config['reg_weight'] and weight_decay and weight_decay * self.config['reg_weight'] > 0:
             self.logger.warning(
                 'The parameters [weight_decay] and [reg_weight] are specified simultaneously, '
                 'which may lead to double regularization.'
             )
 
-        if self.learner.lower() == 'adam':
-            optimizer = optim.Adam(params, lr=self.learning_rate, weight_decay=self.weight_decay)
-        elif self.learner.lower() == 'sgd':
-            optimizer = optim.SGD(params, lr=self.learning_rate, weight_decay=self.weight_decay)
-        elif self.learner.lower() == 'adagrad':
-            optimizer = optim.Adagrad(params, lr=self.learning_rate, weight_decay=self.weight_decay)
-        elif self.learner.lower() == 'rmsprop':
-            optimizer = optim.RMSprop(params, lr=self.learning_rate, weight_decay=self.weight_decay)
-        elif self.learner.lower() == 'sparse_adam':
-            optimizer = optim.SparseAdam(params, lr=self.learning_rate)
-            if self.weight_decay > 0:
+        if learner.lower() == 'adam':
+            optimizer = optim.Adam(params, lr=learning_rate, weight_decay=weight_decay)
+        elif learner.lower() == 'sgd':
+            optimizer = optim.SGD(params, lr=learning_rate, weight_decay=weight_decay)
+        elif learner.lower() == 'adagrad':
+            optimizer = optim.Adagrad(params, lr=learning_rate, weight_decay=weight_decay)
+        elif learner.lower() == 'rmsprop':
+            optimizer = optim.RMSprop(params, lr=learning_rate, weight_decay=weight_decay)
+        elif learner.lower() == 'sparse_adam':
+            optimizer = optim.SparseAdam(params, lr=learning_rate)
+            if weight_decay > 0:
                 self.logger.warning('Sparse Adam cannot argument received argument [{weight_decay}]')
         else:
             self.logger.warning('Received unrecognized optimizer, set default Adam optimizer')
-            optimizer = optim.Adam(params, lr=self.learning_rate)
+            optimizer = optim.Adam(params, lr=learning_rate)
         return optimizer
 
     def _train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
@@ -197,13 +202,14 @@ class Trainer(AbstractTrainer):
         valid_score = calculate_valid_score(valid_result, self.valid_metric)
         return valid_score, valid_result
 
-    def _save_checkpoint(self, epoch):
+    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
         r"""Store the model parameters information and training information.
 
         Args:
             epoch (int): the current epoch id
 
         """
+        saved_model_file = kwargs.pop('saved_model_file', self.saved_model_file)
         state = {
             'config': self.config,
             'epoch': epoch,
@@ -213,7 +219,9 @@ class Trainer(AbstractTrainer):
             'other_parameter': self.model.other_parameter(),
             'optimizer': self.optimizer.state_dict(),
         }
-        torch.save(state, self.saved_model_file)
+        torch.save(state, saved_model_file)
+        if verbose:
+            self.logger.info(set_color('Saving current', 'blue') + f': {saved_model_file}')
 
     def resume_checkpoint(self, resume_file):
         r"""Load the model parameters information and training information.
@@ -327,9 +335,6 @@ class Trainer(AbstractTrainer):
             if self.eval_step <= 0 or not valid_data:
                 if saved:
                     self._save_checkpoint(epoch_idx)
-                    update_output = set_color('Saving current', 'blue') + ': %s' % self.saved_model_file
-                    if verbose:
-                        self.logger.info(update_output)
                 continue
             if (epoch_idx + 1) % self.eval_step == 0:
                 valid_start_time = time()
@@ -354,9 +359,6 @@ class Trainer(AbstractTrainer):
                 if update_flag:
                     if saved:
                         self._save_checkpoint(epoch_idx)
-                        update_output = set_color('Saving current best', 'blue') + ': %s' % self.saved_model_file
-                        if verbose:
-                            self.logger.info(update_output)
                     self.best_valid_result = valid_result
 
                 if callback_fn:
@@ -1050,3 +1052,207 @@ class RecVAETrainer(Trainer):
                 train_data, epoch_idx, loss_func=decoder_loss_func, show_progress=show_progress
             )
         return loss
+
+
+class MetaLearningTrainer(Trainer):
+    def __init__(self, config, model):
+        super(MetaLearningTrainer, self).__init__(config, model)
+        self.best_train_loss = np.inf
+        saved_model_file = f'{self.config["model"]}-meta-{get_local_time()}.pth'
+        self.saved_meta_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+
+        self.meta_epochs = config['meta_epochs']
+        self.num_local_update = config['num_local_update']
+        self.local_learner = config['local_learner']
+        self.local_learning_rate = config['local_learning_rate']
+        self.local_weight_decay = config['local_weight_decay']
+        model.logger = None
+        self.local_model = copy.deepcopy(model)
+        model.logger = self.local_model.logger = self.logger
+        self.local_modules = set(config['local_modules'])
+        for name, module in self.local_model.named_children():
+            if name not in self.local_modules:
+                module.requires_grad_(False)  # Freeze global parameter.
+        self.local_optimizer = self._build_optimizer(
+            self.local_model.parameters(),
+            learner=self.local_learner,
+            learning_rate=self.local_learning_rate,
+            weight_decay=self.local_weight_decay
+        )
+
+    def _support_epoch(self, support_data, task, loss_func=None, show_progress=False):
+        self.local_model.train()
+        loss_func = loss_func or self.local_model.calculate_loss
+        iter_data = (
+            tqdm(
+                support_data,
+                total=len(support_data),
+                ncols=100,
+                desc=set_color(f"Support task {task:>3}", 'pink'),
+            ) if show_progress else support_data
+        )
+        total_loss = 0.0
+        for batch_idx, interaction in enumerate(iter_data):
+            interaction = interaction.to(self.device)
+            self.local_optimizer.zero_grad()
+            loss = loss_func(interaction)
+            if isinstance(loss, tuple):
+                loss = sum(loss)
+            self._check_nan(loss)
+            total_loss += loss.item()
+            loss.backward()
+            if self.clip_grad_norm:
+                clip_grad_norm_(self.local_model.parameters(), **self.clip_grad_norm)
+            self.local_optimizer.step()
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+        return total_loss
+
+    def _query_epoch(self, query_data, task, loss_func=None, show_progress=False):
+        self.model.train()
+        loss_func = loss_func or self.model.calculate_loss
+        iter_data = (
+            tqdm(
+                query_data,
+                total=len(query_data),
+                ncols=100,
+                desc=set_color(f"Query task {task:>5}", 'pink'),
+            ) if show_progress else query_data
+        )
+        total_inter_num = query_data.pr_end
+        total_loss = 0.0
+        for batch_idx, interaction in enumerate(iter_data):
+            interaction = interaction.to(self.device)
+            losses = loss_func(interaction)
+            if isinstance(losses, tuple):
+                loss = sum(losses)
+            else:
+                loss = losses
+            self._check_nan(loss)
+            total_loss = total_loss + loss * len(interaction) / total_inter_num
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+        return total_loss
+
+    def _meta_train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
+        self.model.train()
+        global_state_dict = copy.deepcopy(self.model.state_dict())
+        total_loss = 0.0
+        for batch_idx, batch_task in enumerate(train_data):
+            global_loss = 0.0
+            self.optimizer.zero_grad()
+            for task, (support_data, query_data) in batch_task.items():
+                self.local_model.load_state_dict(global_state_dict)
+                for _ in range(self.num_local_update):
+                    self._support_epoch(support_data, task, loss_func, show_progress)
+                for name in self.local_modules:
+                    state_dict = getattr(self.local_model, name).state_dict()
+                    getattr(self.model, name).load_state_dict(state_dict)
+                global_loss = global_loss + self._query_epoch(query_data, task, loss_func, show_progress)
+            global_loss = global_loss / len(batch_task)
+            self._check_nan(global_loss)
+            total_loss += global_loss.item()
+            global_loss.backward()
+            if self.clip_grad_norm:
+                clip_grad_norm_(self.model.parameters(), **self.clip_grad_norm)
+            self.optimizer.step()
+        return total_loss
+
+    def meta_fit(self, train_data, verbose=True, saved=True, show_progress=False):
+        for epoch_idx in range(self.start_epoch, self.meta_epochs):
+            # train
+            training_start_time = time()
+            train_loss = self._meta_train_epoch(train_data, epoch_idx, show_progress=show_progress)
+            self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
+            training_end_time = time()
+            train_loss_output = \
+                self._generate_train_loss_output(epoch_idx, training_start_time, training_end_time, train_loss)
+            if verbose:
+                self.logger.info(train_loss_output)
+            self._add_train_loss_to_tensorboard(epoch_idx, train_loss)
+
+            self.best_train_loss, self.cur_step, stop_flag, update_flag = early_stopping(
+                train_loss,
+                self.best_train_loss,
+                self.cur_step,
+                max_step=self.stopping_step,
+                bigger=False,
+            )
+            if update_flag and saved:
+                self._save_checkpoint(epoch_idx, saved_model_file=self.saved_meta_model_file)
+
+        return self.best_train_loss
+
+    def _full_sort_batch_eval(self, batched_data):
+        interaction, scores, positive_u, positive_i = \
+            super(MetaLearningTrainer, self)._full_sort_batch_eval(batched_data)
+        scores[:, self.irrelevant_mask] = -np.inf
+        return interaction, scores, positive_u, positive_i
+
+    @torch.no_grad()
+    def evaluate(self, eval_data, load_best_model=True, model_file=None, show_progress=False):
+        if not eval_data:
+            return
+
+        if load_best_model:
+            if model_file:
+                checkpoint_file = model_file
+            else:
+                checkpoint_file = self.saved_model_file
+            checkpoint = torch.load(checkpoint_file)
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.load_other_parameter(checkpoint.get('other_parameter'))
+            message_output = 'Loading model structure and parameters from {}'.format(checkpoint_file)
+            self.logger.info(message_output)
+
+        self.model.eval()
+
+        self.tot_item_num = eval_data.dataset.item_num
+        if isinstance(eval_data, FullSortEvalDataLoader):
+            eval_func = self._full_sort_batch_eval
+            self.irrelevant_mask = torch.ones(self.tot_item_num, dtype=torch.bool, device=self.config['device'])
+            self.irrelevant_mask[eval_data.sampler.candidate_items] = False
+            if self.item_tensor is None:
+                self.item_tensor = eval_data.dataset.get_item_feature().to(self.device)
+        else:
+            eval_func = self._neg_sample_batch_eval
+
+        iter_data = (
+            tqdm(
+                eval_data,
+                total=len(eval_data),
+                ncols=100,
+                desc=set_color(f"Evaluate   ", 'pink'),
+            ) if show_progress else eval_data
+        )
+        for batch_idx, batched_data in enumerate(iter_data):
+            interaction, scores, positive_u, positive_i = eval_func(batched_data)
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+            self.eval_collector.eval_batch_collect(scores, interaction, positive_u, positive_i)
+        self.eval_collector.model_collect(self.model)
+        struct = self.eval_collector.get_data_struct()
+        result = self.evaluator.evaluate(struct)
+
+        return result
+
+    def meta_evaluate(
+        self, eval_data, verbose=True, saved=True, load_best_model=True, show_progress=False
+    ):
+        checkpoint = torch.load(self.saved_meta_model_file)
+        model_file_dict = OrderedDict()
+        task_result = OrderedDict()
+        for batch_idx, batch_task in enumerate(eval_data):
+            for task, (train_data, valid_data, test_data) in batch_task.items():
+                self.logger.info(set_color(f'Training task {task}.', 'pink'))
+                self.model.load_state_dict(checkpoint['state_dict'])
+                self.model.load_other_parameter(checkpoint.get('other_parameter'))
+                saved_model_file = f'{self.config["model"]}-task-{task}-{get_local_time()}.pth'
+                self.saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+                self.fit(train_data, valid_data=valid_data, verbose=verbose, saved=saved, show_progress=show_progress)
+                result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=show_progress)
+                self.logger.info(set_color('test result', 'yellow') + f': {result}')
+                model_file_dict[task] = self.saved_model_file
+                task_result[task] = result
+
+        return model_file_dict, task_result

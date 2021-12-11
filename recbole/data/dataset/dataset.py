@@ -804,7 +804,7 @@ class Dataset:
         """Filter features according to its values.
         """
 
-        val_intervals = [] if self.config['val_interval'] is None else self.config['val_interval']
+        val_intervals = {} if self.config['val_interval'] is None else self.config['val_interval']
         self.logger.debug(set_color('drop_by_value', 'blue') + f': val={val_intervals}')
 
         for field, interval in val_intervals.items():
@@ -840,9 +840,9 @@ class Dataset:
             feat.drop(column=field)
         else:
             feat.drop(columns=field, inplace=True)
-        for dct in [self.field2id_token, self.field2token_id, self.field2seqlen, self.field2source, self.field2type]:
-            if field in dct:
-                del dct[field]
+        # for dct in [self.field2id_token, self.field2token_id, self.field2seqlen, self.field2source, self.field2type]:
+        #     if field in dct:
+        #         del dct[field]
 
     def _filter_inter_by_user_or_item(self):
         """Remove interaction in inter_feat which user or item is not in user_feat or item_feat.

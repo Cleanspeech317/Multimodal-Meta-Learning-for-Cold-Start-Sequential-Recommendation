@@ -13,7 +13,10 @@ import torch
 import pickle
 
 from recbole.config import Config
-from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders
+from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders, \
+    MetaLearningDataLoader
+from recbole.data.dataset import MetaSeqDataset
+from recbole.trainer import MetaLearningTrainer
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 
@@ -131,3 +134,56 @@ def load_data_and_model(model_file):
     model.load_other_parameter(checkpoint.get('other_parameter'))
 
     return config, model, dataset, train_data, valid_data, test_data
+
+
+def run_meta(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True):
+    r""" A fast running api, which includes the complete process of
+    training and testing a model on a specified dataset
+
+    Args:
+        model (str, optional): Model name. Defaults to ``None``.
+        dataset (str, optional): Dataset name. Defaults to ``None``.
+        config_file_list (list, optional): Config files used to modify experiment parameters. Defaults to ``None``.
+        config_dict (dict, optional): Parameters dictionary used to modify experiment parameters. Defaults to ``None``.
+        saved (bool, optional): Whether to save the model. Defaults to ``True``.
+    """
+    # configurations initialization
+    config = Config(model=model, dataset=dataset, config_file_list=config_file_list, config_dict=config_dict)
+    init_seed(config['seed'], config['reproducibility'])
+    # logger initialization
+    init_logger(config)
+    logger = getLogger()
+
+    logger.info(config)
+
+    # dataset filtering
+    dataset = MetaSeqDataset(config)
+    logger.info(dataset)
+
+    # dataset splitting
+    train_data, test_data = dataset.build()
+    train_data = MetaLearningDataLoader(config, dataset, train_data)
+    test_data = MetaLearningDataLoader(config, dataset, test_data)
+
+    # model loading and initialization
+    init_seed(config['seed'], config['reproducibility'])
+    model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
+    logger.info(model)
+
+    # trainer loading and initialization
+    # trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
+    trainer = MetaLearningTrainer(config, model)
+
+    # model training
+    best_train_loss = trainer.meta_fit(train_data, saved=saved, show_progress=config['show_progress'])
+
+    # model evaluation
+    model_file_dict, test_result = trainer.meta_evaluate(
+        test_data, load_best_model=saved, show_progress=config['show_progress']
+    )
+
+    logger.info(set_color('meta model file', 'yellow') + f': {trainer.saved_meta_model_file}')
+    logger.info(set_color('model file dict', 'yellow') + f': {model_file_dict}')
+    logger.info(set_color('test result', 'yellow') + f': {test_result}')
+
+    return test_result

@@ -16,12 +16,16 @@ We only recommend building customized datasets by inheriting.
 Customized datasets named ``[Model Name]Dataset`` can be automatically called.
 """
 
+from collections import defaultdict
+import copy
 import numpy as np
 import torch
 
+from recbole.data import get_dataloader
 from recbole.data.dataset import KGSeqDataset, SequentialDataset
 from recbole.data.interaction import Interaction
 from recbole.sampler import SeqSampler
+from recbole.sampler.sampler import MetaSeqSampler
 from recbole.utils.enum_type import FeatureType, FeatureSource
 
 
@@ -238,3 +242,75 @@ class PretrainRecDataset(SequentialDataset):
 
         new_data.update(Interaction(new_dict))
         self.inter_feat = new_data
+
+
+class MetaSeqDataset(SequentialDataset):
+    def split_by_ratio(self, ratios, group_by=None):
+        if self.task in self.meta_learning_task:
+            ratios[0] += ratios[1]
+            ratios[1] = 0
+            return super(MetaSeqDataset, self).split_by_ratio(ratios, group_by)
+        else:
+            return super(MetaSeqDataset, self).split_by_ratio(ratios, group_by)
+
+    def leave_one_out(self, group_by, leave_one_mode):
+        if self.task in self.meta_learning_task:
+            return super(MetaSeqDataset, self).leave_one_out(group_by, 'test_only')
+        else:
+            return super(MetaSeqDataset, self).leave_one_out(group_by, leave_one_mode)
+
+    def build(self):
+        task_index = defaultdict(list)
+        task_fields = self.config['task_fields']
+        if len(task_fields) == 1:
+            task_fields = task_fields[0]
+        for i, task_value in enumerate(self.inter_feat[task_fields].values):
+            if isinstance(task_fields, str):
+                task = self.id2token(task_fields, task_value)
+            else:
+                task = tuple(self.id2token(f, t) for f, t in zip(task_fields, task_value))
+            task_index[task].append(i)
+
+        meta_learning_task = set()
+        for task in self.config['meta_learning_task']:
+            if isinstance(task_fields, str):
+                if isinstance(task, (list, tuple)):
+                    assert len(task) == 1
+                    task = task[0]
+                meta_learning_task.add(task)
+            else:
+                assert len(task) == len(task_fields)
+                meta_learning_task.add(tuple(task))
+
+        train_dataloader_class = get_dataloader(self.config, 'train')
+        test_dataloader_class = get_dataloader(self.config, 'test')
+
+        train_neg_sample_args = self.config['train_neg_sample_args']
+        eval_neg_sample_args = self.config['eval_neg_sample_args']
+
+        meta_learning_dataloaders = dict()
+        eval_dataloaders = dict()
+        for key, value in task_index.items():
+            dataset = copy.copy(self)
+            dataset.inter_feat = self.inter_feat.loc[value].reset_index(drop=True)
+            dataset.task = key
+            dataset.meta_learning_task = meta_learning_task
+            candidate_items = np.unique(dataset.inter_feat[dataset.iid_field].values)
+            train_dataset, valid_dataset, test_dataset = super(MetaSeqDataset, dataset).build()
+            if key in meta_learning_task:
+                assert len(valid_dataset) == 0
+                support_sampler = MetaSeqSampler(train_dataset, candidate_items, train_neg_sample_args['distribution'])
+                support_dataloader = train_dataloader_class(self.config, train_dataset, support_sampler, shuffle=True)
+                query_sampler = MetaSeqSampler(test_dataset, candidate_items, train_neg_sample_args['distribution'])
+                query_dataloader = train_dataloader_class(self.config, test_dataset, query_sampler, shuffle=True)
+                meta_learning_dataloaders[key] = (support_dataloader, query_dataloader)
+            else:
+                train_sampler = MetaSeqSampler(train_dataset, candidate_items, train_neg_sample_args['distribution'])
+                train_dataloader = train_dataloader_class(self.config, train_dataset, train_sampler, shuffle=True)
+                valid_sampler = MetaSeqSampler(valid_dataset, candidate_items, eval_neg_sample_args['distribution'])
+                valid_dataloader = test_dataloader_class(self.config, valid_dataset, valid_sampler, shuffle=False)
+                test_sampler = MetaSeqSampler(test_dataset, candidate_items, eval_neg_sample_args['distribution'])
+                test_dataloader = test_dataloader_class(self.config, test_dataset, test_sampler, shuffle=False)
+                eval_dataloaders[key] = (train_dataloader, valid_dataloader, test_dataloader)
+
+        return meta_learning_dataloaders, eval_dataloaders
