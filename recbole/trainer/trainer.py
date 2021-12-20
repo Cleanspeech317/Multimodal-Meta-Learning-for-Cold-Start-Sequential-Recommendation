@@ -1246,9 +1246,11 @@ class MetaLearningTrainer(Trainer):
                 self.model.load_other_parameter(checkpoint.get('other_parameter'))
                 saved_model_file = f'{self.config["model"]}-task-{task}-{get_local_time()}.pth'
                 self.saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+                self.start_epoch = 0
                 self.cur_step = 0
                 self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
                 self.best_valid_result = None
+                self.train_loss_dict = dict()
                 self.fit(train_data, valid_data=valid_data, verbose=verbose, saved=saved, show_progress=show_progress)
                 result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=show_progress)
                 self.logger.info(set_color('test result', 'yellow') + f': {result}')
@@ -1256,3 +1258,31 @@ class MetaLearningTrainer(Trainer):
                 task_result[task] = result
 
         return model_file_dict, task_result
+
+    def meta_evaluate_with_model_file(
+        self, eval_data, model_file=None, verbose=True, saved=True, load_best_model=True, show_progress=False
+    ):
+        checkpoint = torch.load(model_file)
+        current_state_dict = self.model.state_dict()
+        checkpoint['state_dict']['item_embedding.weight'] = current_state_dict['item_embedding.weight']
+        # model_file_dict = OrderedDict()
+        task_result = OrderedDict()
+        for batch_idx, batch_task in enumerate(eval_data):
+            for task, (train_data, valid_data, test_data) in batch_task.items():
+                self.logger.info(set_color(f'Training task {task}.', 'pink'))
+                self.model.load_state_dict(checkpoint['state_dict'])
+                self.model.load_other_parameter(checkpoint.get('other_parameter'))
+                # saved_model_file = f'{self.config["model"]}-task-{task}-{get_local_time()}.pth'
+                # self.saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+                self.start_epoch = 0
+                self.cur_step = 0
+                self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
+                self.best_valid_result = None
+                self.train_loss_dict = dict()
+                self.fit(train_data, valid_data=valid_data, verbose=verbose, saved=saved, show_progress=show_progress)
+                result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=show_progress)
+                self.logger.info(set_color('test result', 'yellow') + f': {result}')
+                # model_file_dict[task] = self.saved_model_file
+                task_result[task] = result
+
+        return task_result
