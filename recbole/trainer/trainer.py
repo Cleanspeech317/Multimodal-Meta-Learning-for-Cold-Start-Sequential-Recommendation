@@ -314,7 +314,7 @@ class Trainer(AbstractTrainer):
              (float, dict): best valid score and best valid result. If valid_data is None, it returns (-1, None)
         """
         if saved and self.start_epoch >= self.epochs:
-            self._save_checkpoint(-1)
+            self._save_checkpoint(-1, verbose=verbose)
 
         self.eval_collector.data_collect(train_data)
         if 'dynamic' in self.config['train_neg_sample_args'].keys() and self.config['train_neg_sample_args']['dynamic'] != 'none':
@@ -334,7 +334,7 @@ class Trainer(AbstractTrainer):
             # eval
             if self.eval_step <= 0 or not valid_data:
                 if saved:
-                    self._save_checkpoint(epoch_idx)
+                    self._save_checkpoint(epoch_idx, verbose=verbose)
                 continue
             if (epoch_idx + 1) % self.eval_step == 0:
                 valid_start_time = time()
@@ -358,7 +358,7 @@ class Trainer(AbstractTrainer):
 
                 if update_flag:
                     if saved:
-                        self._save_checkpoint(epoch_idx)
+                        self._save_checkpoint(epoch_idx, verbose=verbose)
                     self.best_valid_result = valid_result
 
                 if callback_fn:
@@ -1260,12 +1260,11 @@ class MetaLearningTrainer(Trainer):
         return model_file_dict, task_result
 
     def meta_evaluate_with_model_file(
-        self, eval_data, model_file=None, verbose=True, saved=True, load_best_model=True, show_progress=False
+        self, eval_data, meta_model_file=None, item_emb_file=None, saved=True, load_best_model=True, show_progress=False
     ):
-        checkpoint = torch.load(model_file)
-        current_state_dict = self.model.state_dict()
-        checkpoint['state_dict']['item_embedding.weight'] = current_state_dict['item_embedding.weight']
-        # model_file_dict = OrderedDict()
+        checkpoint = torch.load(meta_model_file)
+        item_emb_checkpoint = torch.load(item_emb_file)
+        checkpoint['state_dict']['item_embedding.weight'] = item_emb_checkpoint['state_dict']['item_embedding.weight']
         task_result = OrderedDict()
         for batch_idx, batch_task in enumerate(eval_data):
             for task, (train_data, valid_data, test_data) in batch_task.items():
@@ -1279,9 +1278,9 @@ class MetaLearningTrainer(Trainer):
                 self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
                 self.best_valid_result = None
                 self.train_loss_dict = dict()
-                self.fit(train_data, valid_data=valid_data, verbose=verbose, saved=saved, show_progress=show_progress)
-                result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=show_progress)
-                self.logger.info(set_color('test result', 'yellow') + f': {result}')
+                self.fit(train_data, valid_data=valid_data, verbose=False, saved=saved, show_progress=False)
+                result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
+                # self.logger.info(set_color('test result', 'yellow') + f': {result}')
                 # model_file_dict[task] = self.saved_model_file
                 task_result[task] = result
 

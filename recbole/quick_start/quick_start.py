@@ -164,7 +164,7 @@ def run_meta(model=None, dataset=None, config_file_list=None, config_dict=None, 
     # dataset splitting
     train_data, test_data = dataset.build()
     train_data = MetaLearningDataLoader(config, dataset, train_data)
-    test_data = MetaLearningDataLoader(config, dataset, test_data)
+    test_data = MetaLearningDataLoader(config, dataset, test_data, shuffle=False)
 
     # model loading and initialization
     init_seed(config['seed'], config['reproducibility'])
@@ -262,7 +262,7 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
 
     # dataset splitting
     test_data = dataset.build()
-    test_data = MetaLearningDataLoader(config, dataset, test_data)
+    test_data = MetaLearningDataLoader(config, dataset, test_data, shuffle=False)
 
     # model loading and initialization
     init_seed(config['seed'], config['reproducibility'])
@@ -275,7 +275,8 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
 
     # model evaluation
     test_result = trainer.meta_evaluate_with_model_file(
-        test_data, model_file=config['model_file'], load_best_model=saved, show_progress=config['show_progress']
+        test_data, meta_model_file=config['model_file'], item_emb_file=config['item_emb_file'],
+        load_best_model=saved, show_progress=config['show_progress']
     )
     summarize = OrderedDict()
     for task, result in test_result.items():
@@ -290,4 +291,3 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
     logger.info(set_color('test result', 'yellow') + f': {test_result}')
 
     return summarize
-
