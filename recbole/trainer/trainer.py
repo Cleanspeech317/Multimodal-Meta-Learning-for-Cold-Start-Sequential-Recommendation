@@ -1078,7 +1078,6 @@ class MetaLearningTrainer(Trainer):
         )
 
     def _support_epoch(self, support_data, task, loss_func=None, show_progress=False):
-        self.local_model.train()
         loss_func = loss_func or self.local_model.calculate_loss
         iter_data = (
             tqdm(
@@ -1106,7 +1105,6 @@ class MetaLearningTrainer(Trainer):
         return total_loss
 
     def _query_epoch(self, query_data, task, loss_func=None, show_progress=False):
-        self.model.train()
         loss_func = loss_func or self.model.calculate_loss
         iter_data = (
             tqdm(
@@ -1133,9 +1131,10 @@ class MetaLearningTrainer(Trainer):
 
     def _meta_train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
         self.model.train()
-        global_state_dict = copy.deepcopy(self.model.state_dict())
+        self.local_model.train()
         total_loss = 0.0
         for batch_idx, batch_task in enumerate(train_data):
+            global_state_dict = copy.deepcopy(self.model.state_dict())
             global_loss = 0.0
             self.optimizer.zero_grad()
             for task, (support_data, query_data) in batch_task.items():
