@@ -101,19 +101,20 @@ class Trainer(AbstractTrainer):
         self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
         self.best_valid_result = None
         self.train_loss_dict = dict()
-        self.optimizer = self._build_optimizer(self.model.parameters())
+        self.optimizer = self._build_optimizer()
         self.eval_type = config['eval_type']
         self.eval_collector = Collector(config)
         self.evaluator = Evaluator(config)
         self.item_tensor = None
         self.tot_item_num = None
 
-    def _build_optimizer(self, params, **kwargs):
+    def _build_optimizer(self, **kwargs):
         r"""Init the Optimizer
 
         Returns:
             torch.optim: the optimizer
         """
+        params = kwargs.pop('params', self.model.parameters())
         learner = kwargs.pop('learner', self.learner)
         learning_rate = kwargs.pop('learning_rate', self.learning_rate)
         weight_decay = kwargs.pop('weight_decay', self.weight_decay)
@@ -1031,8 +1032,8 @@ class RecVAETrainer(Trainer):
         self.n_enc_epochs = config['n_enc_epochs']
         self.n_dec_epochs = config['n_dec_epochs']
 
-        self.optimizer_encoder = self._build_optimizer(self.model.encoder.parameters())
-        self.optimizer_decoder = self._build_optimizer(self.model.decoder.parameters())
+        self.optimizer_encoder = self._build_optimizer(params=self.model.encoder.parameters())
+        self.optimizer_decoder = self._build_optimizer(params=self.model.decoder.parameters())
 
     def _train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
         self.optimizer = self.optimizer_encoder
@@ -1055,8 +1056,6 @@ class MetaLearningTrainer(Trainer):
     def __init__(self, config, model):
         super(MetaLearningTrainer, self).__init__(config, model)
         self.best_train_loss = np.inf
-        saved_model_file = f'{self.config["model"]}-meta-{get_local_time()}.pth'
-        self.saved_meta_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
 
         self.meta_epochs = config['meta_epochs']
         self.num_local_update = config['num_local_update']
@@ -1071,7 +1070,7 @@ class MetaLearningTrainer(Trainer):
             if name not in self.local_modules:
                 module.requires_grad_(False)  # Freeze global parameter.
         self.local_optimizer = self._build_optimizer(
-            self.local_model.parameters(),
+            params=self.local_model.parameters(),
             learner=self.local_learner,
             learning_rate=self.local_learning_rate,
             weight_decay=self.local_weight_decay
@@ -1174,8 +1173,10 @@ class MetaLearningTrainer(Trainer):
                 max_step=self.stopping_step,
                 bigger=False,
             )
-            if update_flag and saved:
-                self._save_checkpoint(epoch_idx, saved_model_file=self.saved_meta_model_file)
+            if saved:
+                saved_model_file = f'{self.config["model"]}-meta-{epoch_idx}-{get_local_time()}.pth'
+                saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
+                self._save_checkpoint(epoch_idx, verbose=verbose, saved_model_file=saved_model_file)
 
         return self.best_train_loss
 
