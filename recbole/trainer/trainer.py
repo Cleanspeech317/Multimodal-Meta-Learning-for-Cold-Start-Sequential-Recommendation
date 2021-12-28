@@ -1056,6 +1056,8 @@ class MetaLearningTrainer(Trainer):
     def __init__(self, config, model):
         super(MetaLearningTrainer, self).__init__(config, model)
         self.best_train_loss = np.inf
+        saved_model_file = f'{self.config["model"]}-meta-{get_local_time()}.pth'
+        self.saved_meta_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
 
         self.meta_epochs = config['meta_epochs']
         self.num_local_update = config['num_local_update']
