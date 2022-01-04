@@ -1178,9 +1178,29 @@ class MetaLearningTrainer(Trainer):
             if saved:
                 saved_model_file = f'{self.config["model"]}-meta-{epoch_idx}-{get_local_time()}.pth'
                 saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
-                self._save_checkpoint(epoch_idx, verbose=verbose, saved_model_file=saved_model_file)
+                super(MetaLearningTrainer, self)._save_checkpoint(
+                    epoch_idx, verbose=verbose, saved_model_file=saved_model_file
+                )
 
         return self.best_train_loss
+
+    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
+        r"""Store the model parameters information and training information.
+
+        Args:
+            epoch (int): the current epoch id
+
+        """
+        state = {
+            'config': self.config,
+            'epoch': epoch,
+            'cur_step': self.cur_step,
+            'best_valid_score': self.best_valid_score,
+            'state_dict': self.model.state_dict(),
+            'other_parameter': self.model.other_parameter(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        self.checkpoint = state
 
     def _full_sort_batch_eval(self, batched_data):
         interaction, scores, positive_u, positive_i = \
@@ -1194,11 +1214,7 @@ class MetaLearningTrainer(Trainer):
             return
 
         if load_best_model:
-            if model_file:
-                checkpoint_file = model_file
-            else:
-                checkpoint_file = self.saved_model_file
-            checkpoint = torch.load(checkpoint_file)
+            checkpoint = self.checkpoint
             self.model.load_state_dict(checkpoint['state_dict'])
             self.model.load_other_parameter(checkpoint.get('other_parameter'))
 
