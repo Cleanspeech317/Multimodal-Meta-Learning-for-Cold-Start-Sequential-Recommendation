@@ -151,9 +151,7 @@ class Dataset:
             self._data_filtering()
 
         self._remap_ID_all()
-        
         self._filter_by_user_inter_time()
-        
         self._user_item_feat_preparation()
         self._fill_nan()
         self._set_label_by_threshold()
@@ -178,37 +176,29 @@ class Dataset:
         self._filter_by_field_value()
         self._filter_inter_by_user_or_item()
         self._filter_by_inter_num()
-
         self._reset_index()
 
     def _filter_by_user_inter_time(self):
-        
         tmp_df = self.inter_feat.copy(deep=True)
         tmp_df.drop_duplicates(self.uid_field, keep='first', inplace=True)
         time_list = tmp_df[self.time_field].values
         time_list = np.sort(time_list)        
-        
-        split_time = time_list[int(len(time_list)*self.config[time_split_ratio])]
+
+        split_time = time_list[int(len(time_list)*self.config['time_split_ratio'])]
 
         cols = [self.uid_field, self.time_field] 
         tmp_df = tmp_df[cols]
-        
+
         tmp_df = tmp_df.rename(columns={'exposure_time': 'first_inter_time'})
 
         self.inter_feat = pd.merge(self.inter_feat, tmp_df, how='left', on=self.uid_field)
-    
-        self.field2source['first_inter_time'] = FeatureSource.INTERACTION
-        self.field2type['first_inter_time'] = FeatureType.FLOAT
 
-    
         if self.config['data_source'] == 'up':
             self.inter_feat = self.inter_feat[self.inter_feat[self.time_field] <= split_time]
-                        
         elif self.config['data_source'] == 'down':
-            self.inter_feat = self.inter_feat[self.inter_feat['first_inter_time'] > split_time] 
-           
-        
-        
+            self.inter_feat = self.inter_feat[self.inter_feat['first_inter_time'] > split_time]
+        del self.inter_feat['first_inter_time']
+
     def _build_feat_name_list(self):
         """Feat list building.
 
