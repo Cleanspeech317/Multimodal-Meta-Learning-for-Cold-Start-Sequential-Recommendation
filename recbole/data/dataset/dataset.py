@@ -198,6 +198,7 @@ class Dataset:
         elif self.config['data_source'] == 'down':
             self.inter_feat = self.inter_feat[self.inter_feat['first_inter_time'] > split_time]
         del self.inter_feat['first_inter_time']
+        self._reset_index()
 
     def _build_feat_name_list(self):
         """Feat list building.
