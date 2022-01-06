@@ -436,7 +436,7 @@ class Dataset:
             return None
 
         df = pd.read_csv(
-            filepath, delimiter=self.config['field_separator'], usecols=usecols, dtype=dtype, encoding=encoding, engine='python'
+            filepath, delimiter=field_separator, usecols=usecols, dtype=dtype, encoding=encoding, engine='python'
         )
         df.columns = columns
 

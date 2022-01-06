@@ -111,6 +111,13 @@ class Trainer(AbstractTrainer):
     def _build_optimizer(self, **kwargs):
         r"""Init the Optimizer
 
+        Args:
+            params (torch.nn.Parameter, optional): The parameters to be optimized.
+                Defaults to ``self.model.parameters()``.
+            learner (str, optional): The name of used optimizer. Defaults to ``self.learner``.
+            learning_rate (float, optional): Learning rate. Defaults to ``self.learning_rate``.
+            weight_decay (float, optional): The L2 regularization weight. Defaults to ``self.weight_decay``.
+
         Returns:
             torch.optim: the optimizer
         """
@@ -318,7 +325,7 @@ class Trainer(AbstractTrainer):
             self._save_checkpoint(-1, verbose=verbose)
 
         self.eval_collector.data_collect(train_data)
-        if 'dynamic' in self.config['train_neg_sample_args'].keys() and self.config['train_neg_sample_args']['dynamic'] != 'none':
+        if self.config['train_neg_sample_args'].get('dynamic', 'none') != 'none':
             train_data.get_model(self.model)
         for epoch_idx in range(self.start_epoch, self.epochs):
             # train
@@ -431,10 +438,7 @@ class Trainer(AbstractTrainer):
             return
 
         if load_best_model:
-            if model_file:
-                checkpoint_file = model_file
-            else:
-                checkpoint_file = self.saved_model_file
+            checkpoint_file = model_file or self.saved_model_file
             checkpoint = torch.load(checkpoint_file)
             self.model.load_state_dict(checkpoint['state_dict'])
             self.model.load_other_parameter(checkpoint.get('other_parameter'))
