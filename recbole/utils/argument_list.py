@@ -50,4 +50,5 @@ dataset_arguments = [
     'alias_of_user_id', 'alias_of_item_id', 'alias_of_entity_id', 'alias_of_relation_id',
     'preload_weight', 'normalize_field', 'normalize_all',
     'benchmark_filename',
+    'time_split_ratio', 'data_source',
 ]
