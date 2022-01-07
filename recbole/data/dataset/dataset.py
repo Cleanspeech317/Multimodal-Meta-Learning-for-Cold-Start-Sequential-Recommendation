@@ -179,6 +179,11 @@ class Dataset:
         self._reset_index()
 
     def _filter_by_user_inter_time(self):
+        if self.config['time_split_ratio'] is None and self.config['data_source'] is None:
+            return
+        if self.config['time_split_ratio'] is None or self.config['data_source'] is None:
+            raise ValueError('`time_split_ratio` and `data_source` should be set at the same time '
+                             'or not set at the same time.')
         tmp_df = self.inter_feat.copy(deep=True)
         tmp_df.drop_duplicates(self.uid_field, keep='first', inplace=True)
         time_list = tmp_df[self.time_field].values
