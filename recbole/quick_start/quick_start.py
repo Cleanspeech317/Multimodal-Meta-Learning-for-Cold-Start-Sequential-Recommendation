@@ -274,20 +274,28 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
     trainer = MetaLearningTrainer(config, model)
 
     # model evaluation
-    test_result = trainer.meta_evaluate_with_model_file(
+    valid_result, test_result = trainer.meta_evaluate_with_model_file(
         test_data, meta_model_file=config['model_file'], item_emb_file=config['item_emb_file'],
         load_best_model=saved, show_progress=config['show_progress']
     )
-    summarize = OrderedDict()
-    for task, result in test_result.items():
-        for key, value in result.items():
-            if key not in summarize:
-                summarize[key] = 0.0
-            summarize[key] += value
-    for key in summarize:
-        summarize[key] = summarize[key] / len(test_result)
 
-    logger.info(set_color('summarize', 'yellow') + f': {summarize}')
+    def summarize_result(result):
+        summarize = OrderedDict()
+        for task, res in result.items():
+            for key, value in res.items():
+                if key not in summarize:
+                    summarize[key] = 0.0
+                summarize[key] += value
+        for key in summarize:
+            summarize[key] = summarize[key] / len(result)
+        return summarize
+
+    valid_summarize = summarize_result(valid_result)
+    test_summarize = summarize_result(test_result)
+
+    logger.info(set_color('valid summarize', 'yellow') + f': {valid_summarize}')
+    logger.info(set_color('valid result', 'yellow') + f': {valid_result}')
+    logger.info(set_color('test summarize', 'yellow') + f': {test_summarize}')
     logger.info(set_color('test result', 'yellow') + f': {test_result}')
 
-    return summarize
+    return test_summarize

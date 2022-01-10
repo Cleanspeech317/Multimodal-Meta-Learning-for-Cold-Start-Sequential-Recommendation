@@ -30,7 +30,7 @@ if __name__ == '__main__':
         try:
             from mtjupyter_utils import remind
             message = ' '.join([str(args.model), args.hint]) + '\n'
-            message += ' '.join(map(str, result['test_result'].values()))
+            message += ' '.join(map(str, result.values()))
             remind(message)
         except Exception as e:
             pass

@@ -1140,7 +1140,6 @@ class MetaLearningTrainer(Trainer):
         total_loss = 0.0
         for batch_idx, batch_task in enumerate(train_data):
             global_state_dict = copy.deepcopy(self.model.state_dict())
-            global_loss = 0.0
             self.optimizer.zero_grad()
             for task, (support_data, query_data) in batch_task.items():
                 self.local_model.load_state_dict(global_state_dict)
@@ -1149,11 +1148,10 @@ class MetaLearningTrainer(Trainer):
                 for name in self.local_modules:
                     state_dict = getattr(self.local_model, name).state_dict()
                     getattr(self.model, name).load_state_dict(state_dict)
-                global_loss = global_loss + self._query_epoch(query_data, task, loss_func, show_progress)
-            global_loss = global_loss / len(batch_task)
-            self._check_nan(global_loss)
-            total_loss += global_loss.item()
-            global_loss.backward()
+                global_loss = self._query_epoch(query_data, task, loss_func, show_progress) / len(batch_task)
+                self._check_nan(global_loss)
+                total_loss += global_loss.item()
+                global_loss.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model.parameters(), **self.clip_grad_norm)
             self.optimizer.step()
@@ -1290,7 +1288,8 @@ class MetaLearningTrainer(Trainer):
             state_dict = self.model.state_dict()
             item_emb_weight = state_dict['item_embedding.weight']
         checkpoint['state_dict']['item_embedding.weight'] = item_emb_weight
-        task_result = OrderedDict()
+        task_valid_result = OrderedDict()
+        task_test_result = OrderedDict()
         iter_data = (
             tqdm(
                 eval_data.meta_learning_dataloaders.items(),
@@ -1307,8 +1306,9 @@ class MetaLearningTrainer(Trainer):
             self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
             self.best_valid_result = None
             self.train_loss_dict = dict()
-            self.fit(train_data, valid_data=valid_data, verbose=False, saved=saved, show_progress=False)
-            result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
-            task_result[task] = result
+            _, valid_result = self.fit(train_data, valid_data, verbose=False, saved=saved, show_progress=False)
+            test_result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
+            task_valid_result[task] = valid_result
+            task_test_result[task] = test_result
 
-        return task_result
+        return task_valid_result, task_test_result

@@ -383,7 +383,7 @@ class MetaTestDataset(SequentialDataset):
             dataset = copy.copy(self)
             dataset.inter_feat = self.inter_feat.loc[value].reset_index(drop=True)
             train_dataset, valid_dataset, test_dataset = super(MetaTestDataset, dataset).build()
-            if len(train_dataset) == 0 or len(test_dataset) == 0:
+            if len(train_dataset) == 0 or len(valid_dataset) == 0 or len(test_dataset) == 0:
                 continue
             train_sampler = MetaSeqSampler(train_dataset, candidate_items, train_neg_sample_args['distribution'])
             train_dataloader = train_dataloader_class(self.config, train_dataset, train_sampler, shuffle=True)
