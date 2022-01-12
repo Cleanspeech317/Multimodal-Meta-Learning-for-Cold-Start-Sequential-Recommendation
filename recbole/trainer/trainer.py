@@ -1281,13 +1281,13 @@ class MetaLearningTrainer(Trainer):
         self, eval_data, meta_model_file=None, item_emb_file=None, saved=True, load_best_model=True, show_progress=False
     ):
         checkpoint = torch.load(meta_model_file)
-        if item_emb_file is not None:
-            item_emb_checkpoint = torch.load(item_emb_file)
-            item_emb_weight = item_emb_checkpoint['state_dict']['item_embedding.weight']
-        else:
-            state_dict = self.model.state_dict()
-            item_emb_weight = state_dict['item_embedding.weight']
-        checkpoint['state_dict']['item_embedding.weight'] = item_emb_weight
+        # if item_emb_file is not None:
+        #     item_emb_checkpoint = torch.load(item_emb_file)
+        #     item_emb_weight = item_emb_checkpoint['state_dict']['item_embedding.weight']
+        # else:
+        #     state_dict = self.model.state_dict()
+        #     item_emb_weight = state_dict['item_embedding.weight']
+        # checkpoint['state_dict']['item_embedding.weight'] = item_emb_weight
         task_valid_result = OrderedDict()
         task_test_result = OrderedDict()
         iter_data = (
