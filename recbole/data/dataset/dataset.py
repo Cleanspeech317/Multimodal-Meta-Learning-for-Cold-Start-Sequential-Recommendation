@@ -179,29 +179,26 @@ class Dataset:
         self._reset_index()
 
     def _filter_by_user_inter_time(self):
-        if self.config['time_split_ratio'] is None and self.config['data_source'] is None:
+        data_source = self.config['data_source']
+        if data_source is None:
             return
-        if self.config['time_split_ratio'] is None or self.config['data_source'] is None:
-            raise ValueError('`time_split_ratio` and `data_source` should be set at the same time '
-                             'or not set at the same time.')
-        tmp_df = self.inter_feat.copy(deep=True)
-        tmp_df.drop_duplicates(self.uid_field, keep='first', inplace=True)
-        time_list = tmp_df[self.time_field].values
-        time_list = np.sort(time_list)        
-
-        split_time = time_list[int(len(time_list)*self.config['time_split_ratio'])]
-
-        cols = [self.uid_field, self.time_field] 
-        tmp_df = tmp_df[cols]
-
-        tmp_df = tmp_df.rename(columns={'exposure_time': 'first_inter_time'})
+        elif self.config['data_split_time'] is None:
+            raise ValueError('`data_split_time` should be set when `data_source` is set.')
+        tmp_df = self.inter_feat[[self.uid_field, self.time_field]].drop_duplicates(self.uid_field, keep='first')
+        tmp_df = tmp_df.rename(columns={self.time_field: 'first_inter_time'})
 
         self.inter_feat = pd.merge(self.inter_feat, tmp_df, how='left', on=self.uid_field)
+        split_time = self.config['data_split_time']
 
-        if self.config['data_source'] == 'up':
+        old_user_inter_num_interval = self.config['user_inter_num_interval']
+        if data_source == 'up':
             self.inter_feat = self.inter_feat[self.inter_feat[self.time_field] <= split_time]
-        elif self.config['data_source'] == 'down':
+            self.config['user_inter_num_interval'] = self.config['upstream_user_inter_num_interval']
+        elif data_source == 'down':
             self.inter_feat = self.inter_feat[self.inter_feat['first_inter_time'] > split_time]
+            self.config['user_inter_num_interval'] = self.config['downstream_user_inter_num_interval']
+        self._filter_by_inter_num()
+        self.config['user_inter_num_interval'] = old_user_inter_num_interval
         del self.inter_feat['first_inter_time']
         self._reset_index()
 
