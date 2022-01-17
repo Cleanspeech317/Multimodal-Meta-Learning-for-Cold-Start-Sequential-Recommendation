@@ -24,6 +24,7 @@ from time import time
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from tqdm import tqdm
@@ -1312,3 +1313,131 @@ class MetaLearningTrainer(Trainer):
             task_test_result[task] = test_result
 
         return task_valid_result, task_test_result
+
+
+class FusionModel(nn.Module):
+    def __init__(self, config, model_list):
+        super(FusionModel, self).__init__()
+        self.config = config
+        self.fusion_weight = torch.tensor(config['fusion_weight'], device=config['device'])
+        self.model_list = nn.ModuleList(model_list)
+
+    def load_checkpoint(self, checkpoint_list):
+        for model, checkpoint in zip(self.model_list, checkpoint_list):
+            model.load_state_dict(checkpoint['state_dict'])
+            model.load_other_parameter(checkpoint.get('other_parameter'))
+
+    def fusion(self, scores_list):
+        weight = self.fusion_weight.view(-1, *((1,) * (scores_list.dim() - 1)))
+        return (weight * scores_list).sum(0)
+
+    def predict(self, interaction):
+        scores_list = torch.stack([model.predict(interaction) for model in self.model_list])
+        return self.fusion(scores_list)
+
+    def full_sort_predict(self, interaction):
+        scores_list = torch.stack([model.full_sort_predict(interaction) for model in self.model_list])
+        return self.fusion(scores_list)
+
+
+class MetaFusionTrainer(Trainer):
+    def __init__(self, config, model_list):
+        self.fusion_model = FusionModel(config, model_list)
+        super(MetaFusionTrainer, self).__init__(config, self.fusion_model)
+        self.checkpoint_list = []
+
+    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
+        r"""Store the model parameters information and training information.
+
+        Args:
+            epoch (int): the current epoch id
+
+        """
+        state = {
+            'config': self.config,
+            'epoch': epoch,
+            'cur_step': self.cur_step,
+            'best_valid_score': self.best_valid_score,
+            'state_dict': self.model.state_dict(),
+            'other_parameter': self.model.other_parameter(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        self.checkpoint = state
+
+    def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
+        self.checkpoint_list = []
+        for model in self.fusion_model.model_list:
+            self.model = model
+            self.start_epoch = 0
+            self.cur_step = 0
+            self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
+            self.best_valid_result = None
+            self.train_loss_dict = dict()
+            _, _ = super(MetaFusionTrainer, self).fit(
+                train_data, valid_data, verbose, saved, show_progress, callback_fn
+            )
+            self.checkpoint_list.append(self.checkpoint)
+        self.model = self.fusion_model
+        return self._valid_epoch(valid_data, show_progress)
+
+    @torch.no_grad()
+    def evaluate(self, eval_data, load_best_model=True, model_file=None, show_progress=False):
+        if not eval_data:
+            return
+
+        if load_best_model:
+            assert isinstance(self.model, FusionModel)
+            self.model.load_checkpoint(self.checkpoint_list)
+
+        self.model.eval()
+
+        self.tot_item_num = eval_data.dataset.item_num
+        if isinstance(eval_data, FullSortEvalDataLoader):
+            eval_func = self._full_sort_batch_eval
+            if self.item_tensor is None:
+                self.item_tensor = eval_data.dataset.get_item_feature().to(self.device)
+        else:
+            eval_func = self._neg_sample_batch_eval
+
+        iter_data = (
+            tqdm(
+                eval_data,
+                total=len(eval_data),
+                ncols=100,
+                desc=set_color(f"Evaluate   ", 'pink'),
+            ) if show_progress else eval_data
+        )
+        for batch_idx, batched_data in enumerate(iter_data):
+            interaction, scores, positive_u, positive_i = eval_func(batched_data)
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+            self.eval_collector.eval_batch_collect(scores, interaction, positive_u, positive_i)
+        self.eval_collector.model_collect(self.model)
+        struct = self.eval_collector.get_data_struct()
+        result = self.evaluator.evaluate(struct)
+
+        return result
+
+    def meta_fusion_evaluate_with_model_file(
+        self, eval_data, meta_model_file=None, saved=True, load_best_model=True, show_progress=False
+    ):
+        init_checkpoint_list = [torch.load(file) for file in meta_model_file]
+        task_valid_result = OrderedDict()
+        task_test_result = OrderedDict()
+        iter_data = (
+            tqdm(
+                eval_data.meta_learning_dataloaders.items(),
+                total=len(eval_data.meta_learning_dataloaders),
+                ncols=100,
+                desc=set_color(f"Evaluate   ", 'pink'),
+            ) if show_progress else eval_data.meta_learning_dataloaders.items()
+        )
+        for task, (train_data, valid_data, test_data) in iter_data:
+            self.fusion_model.load_checkpoint(init_checkpoint_list)
+            _, valid_result = self.fit(train_data, valid_data, verbose=False, saved=saved, show_progress=False)
+            test_result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
+            task_valid_result[task] = valid_result
+            task_test_result[task] = test_result
+
+        return task_valid_result, task_test_result
+

@@ -17,7 +17,7 @@ from recbole.config import Config
 from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders, \
     MetaLearningDataLoader
 from recbole.data.dataset import MetaSeqDataset, MetaTrainDataset, MetaTestDataset
-from recbole.trainer import MetaLearningTrainer
+from recbole.trainer import MetaLearningTrainer, MetaFusionTrainer
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 
@@ -299,3 +299,66 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
     logger.info(set_color('test result', 'yellow') + f': {test_result}')
 
     return test_summarize
+
+
+def run_meta_fusion_test(model_name_list=None, dataset=None, config_file_lists=None, config_dict=None, saved=True):
+    # configurations initialization
+    config_list = []
+    for model, config_file_list in zip(model_name_list, config_file_lists):
+        config = Config(model=model, dataset=dataset, config_file_list=config_file_list, config_dict=config_dict)
+        config_list.append(config)
+    config = config_list[0]
+
+    init_seed(config['seed'], config['reproducibility'])
+    # logger initialization
+    init_logger(config)
+    logger = getLogger()
+
+    logger.info(config)
+
+    # dataset filtering
+    dataset = MetaTestDataset(config)
+    logger.info(dataset)
+
+    # dataset splitting
+    test_data = dataset.build()
+    test_data = MetaLearningDataLoader(config, dataset, test_data, shuffle=False)
+
+    # model loading and initialization
+    model_list = []
+    for model_config in config_list:
+        init_seed(model_config['seed'], model_config['reproducibility'])
+        model = get_model(model_config['model'])(model_config, test_data.dataset).to(model_config['device'])
+        logger.info(model)
+        model_list.append(model)
+
+    # trainer loading and initialization
+    trainer = MetaFusionTrainer(config, model_list)
+
+    # model evaluation
+    valid_result, test_result = trainer.meta_fusion_evaluate_with_model_file(
+        test_data, meta_model_file=config['model_file'],
+        load_best_model=saved, show_progress=config['show_progress']
+    )
+
+    def summarize_result(result):
+        summarize = OrderedDict()
+        for task, res in result.items():
+            for key, value in res.items():
+                if key not in summarize:
+                    summarize[key] = 0.0
+                summarize[key] += value
+        for key in summarize:
+            summarize[key] = summarize[key] / len(result)
+        return summarize
+
+    valid_summarize = summarize_result(valid_result)
+    test_summarize = summarize_result(test_result)
+
+    logger.info(set_color('valid summarize', 'yellow') + f': {valid_summarize}')
+    logger.info(set_color('valid result', 'yellow') + f': {valid_result}')
+    logger.info(set_color('test summarize', 'yellow') + f': {test_summarize}')
+    logger.info(set_color('test result', 'yellow') + f': {test_result}')
+
+    return test_summarize
+
