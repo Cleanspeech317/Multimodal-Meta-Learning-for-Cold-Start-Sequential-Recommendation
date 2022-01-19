@@ -333,7 +333,7 @@ def run_meta_fusion_test(model_name_list=None, dataset=None, config_file_lists=N
         model_list.append(model)
 
     # trainer loading and initialization
-    trainer = MetaFusionTrainer(config, model_list)
+    trainer = MetaFusionTrainer(config_list, model_list)
 
     # model evaluation
     valid_result, test_result = trainer.meta_fusion_evaluate_with_model_file(

@@ -1341,9 +1341,18 @@ class FusionModel(nn.Module):
 
 
 class MetaFusionTrainer(Trainer):
-    def __init__(self, config, model_list):
+    def __init__(self, config_list, model_list):
+        config = config_list[0]
         self.fusion_model = FusionModel(config, model_list)
         super(MetaFusionTrainer, self).__init__(config, self.fusion_model)
+        params = [
+            {
+                'params': model.parameters(),
+                'lr': model_config['learning_rate'],
+            }
+            for model, model_config in zip(self.fusion_model.model_list, config_list)
+        ]
+        self.optimizer = self._build_optimizer(params=params)
         self.checkpoint_list = []
 
     def _save_checkpoint(self, epoch, verbose=True, **kwargs):
