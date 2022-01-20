@@ -17,7 +17,7 @@ from recbole.config import Config
 from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders, \
     MetaLearningDataLoader
 from recbole.data.dataset import MetaSeqDataset, MetaTrainDataset, MetaTestDataset
-from recbole.trainer import MetaLearningTrainer, MetaFusionTrainer
+from recbole.trainer import MetaLearningTrainer, MetaTestTrainer, MetaFusionTrainer
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 
@@ -271,10 +271,10 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
 
     # trainer loading and initialization
     # trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
-    trainer = MetaLearningTrainer(config, model)
+    trainer = MetaTestTrainer(config, model)
 
     # model evaluation
-    valid_result, test_result = trainer.meta_evaluate_with_model_file(
+    valid_result, test_result = trainer.meta_evaluate(
         test_data, meta_model_file=config['model_file'], item_emb_file=config['item_emb_file'],
         load_best_model=saved, show_progress=config['show_progress']
     )

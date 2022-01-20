@@ -1181,29 +1181,9 @@ class MetaLearningTrainer(Trainer):
             if saved:
                 saved_model_file = f'{self.config["model"]}-meta-{epoch_idx}-{get_local_time()}.pth'
                 saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
-                super(MetaLearningTrainer, self)._save_checkpoint(
-                    epoch_idx, verbose=verbose, saved_model_file=saved_model_file
-                )
+                self._save_checkpoint(epoch_idx, verbose=verbose, saved_model_file=saved_model_file)
 
         return self.best_train_loss
-
-    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
-        r"""Store the model parameters information and training information.
-
-        Args:
-            epoch (int): the current epoch id
-
-        """
-        state = {
-            'config': self.config,
-            'epoch': epoch,
-            'cur_step': self.cur_step,
-            'best_valid_score': self.best_valid_score,
-            'state_dict': self.model.state_dict(),
-            'other_parameter': self.model.other_parameter(),
-            'optimizer': self.optimizer.state_dict(),
-        }
-        self.checkpoint = state
 
     def _full_sort_batch_eval(self, batched_data):
         interaction, scores, positive_u, positive_i = \
@@ -1278,7 +1258,59 @@ class MetaLearningTrainer(Trainer):
 
         return model_file_dict, task_result
 
-    def meta_evaluate_with_model_file(
+
+class MetaTestTrainer(Trainer):
+    def __init__(self, config, model):
+        super(MetaTestTrainer, self).__init__(config, model)
+
+    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
+        r"""Store the model parameters information and training information.
+
+        Args:
+            epoch (int): the current epoch id
+
+        """
+        state = {
+            'config': self.config,
+            'epoch': epoch,
+            'cur_step': self.cur_step,
+            'best_valid_score': self.best_valid_score,
+            'state_dict': self.model.state_dict(),
+            'other_parameter': self.model.other_parameter(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        self.checkpoint = state
+
+    @torch.no_grad()
+    def evaluate(self, eval_data, load_best_model=True, model_file=None, show_progress=False):
+        if not eval_data:
+            return
+
+        if load_best_model:
+            checkpoint = self.checkpoint
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.load_other_parameter(checkpoint.get('other_parameter'))
+
+        self.model.eval()
+
+        self.tot_item_num = eval_data.dataset.item_num
+        if isinstance(eval_data, FullSortEvalDataLoader):
+            eval_func = self._full_sort_batch_eval
+            if self.item_tensor is None:
+                self.item_tensor = eval_data.dataset.get_item_feature().to(self.device)
+        else:
+            eval_func = self._neg_sample_batch_eval
+
+        for batch_idx, batched_data in enumerate(eval_data):
+            interaction, scores, positive_u, positive_i = eval_func(batched_data)
+            self.eval_collector.eval_batch_collect(scores, interaction, positive_u, positive_i)
+        self.eval_collector.model_collect(self.model)
+        struct = self.eval_collector.get_data_struct()
+        result = self.evaluator.evaluate(struct)
+
+        return result
+
+    def meta_evaluate(
         self, eval_data, meta_model_file=None, item_emb_file=None, saved=True, load_best_model=True, show_progress=False
     ):
         checkpoint = torch.load(meta_model_file)
@@ -1311,6 +1343,8 @@ class MetaLearningTrainer(Trainer):
             test_result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
             task_valid_result[task] = valid_result
             task_test_result[task] = test_result
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
 
         return task_valid_result, task_test_result
 
