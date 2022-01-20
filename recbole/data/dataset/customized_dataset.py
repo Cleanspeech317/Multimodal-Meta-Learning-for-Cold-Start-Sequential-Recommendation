@@ -340,7 +340,7 @@ class MetaTrainDataset(SequentialDataset):
         train_dataloader_class = get_dataloader(self.config, 'train')
         train_neg_sample_args = self.config['train_neg_sample_args']
 
-        candidate_items = np.unique(self.inter_feat[self.iid_field].values)
+        candidate_items = np.arange(1, self.item_num)
         meta_learning_dataloaders = dict()
         for key, value in task_index.items():
             dataset = copy.copy(self)
@@ -378,7 +378,7 @@ class MetaTestDataset(SequentialDataset):
         eval_neg_sample_args = self.config['eval_neg_sample_args']
 
         eval_dataloaders = dict()
-        candidate_items = np.unique(self.inter_feat[self.iid_field].values)
+        candidate_items = np.arange(1, self.item_num)
         for key, value in task_index.items():
             dataset = copy.copy(self)
             dataset.inter_feat = self.inter_feat.loc[value].reset_index(drop=True)
