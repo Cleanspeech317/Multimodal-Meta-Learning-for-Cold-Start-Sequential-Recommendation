@@ -1139,6 +1139,7 @@ class MetaLearningTrainer(Trainer):
         self.model.train()
         self.local_model.train()
         total_loss = 0.0
+        task_loss = OrderedDict()
         for batch_idx, batch_task in enumerate(train_data):
             global_state_dict = copy.deepcopy(self.model.state_dict())
             self.optimizer.zero_grad()
@@ -1149,20 +1150,22 @@ class MetaLearningTrainer(Trainer):
                 for name in self.local_modules:
                     state_dict = getattr(self.local_model, name).state_dict()
                     getattr(self.model, name).load_state_dict(state_dict)
-                global_loss = self._query_epoch(query_data, task, loss_func, show_progress) / len(batch_task)
+                global_loss = self._query_epoch(query_data, task, loss_func, show_progress)
+                task_loss[task] = global_loss.item()
+                global_loss = global_loss / len(batch_task)
                 self._check_nan(global_loss)
                 total_loss += global_loss.item()
                 global_loss.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model.parameters(), **self.clip_grad_norm)
             self.optimizer.step()
-        return total_loss
+        return total_loss, task_loss
 
     def meta_fit(self, train_data, verbose=True, saved=True, show_progress=False):
         for epoch_idx in range(self.start_epoch, self.meta_epochs):
             # train
             training_start_time = time()
-            train_loss = self._meta_train_epoch(train_data, epoch_idx, show_progress=show_progress)
+            train_loss, task_loss = self._meta_train_epoch(train_data, epoch_idx, show_progress=show_progress)
             self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
             training_end_time = time()
             train_loss_output = \
@@ -1183,7 +1186,7 @@ class MetaLearningTrainer(Trainer):
                 saved_model_file = os.path.join(self.checkpoint_dir, saved_model_file)
                 self._save_checkpoint(epoch_idx, verbose=verbose, saved_model_file=saved_model_file)
 
-        return self.best_train_loss
+        return self.best_train_loss, task_loss
 
     def _full_sort_batch_eval(self, batched_data):
         interaction, scores, positive_u, positive_i = \

@@ -228,10 +228,10 @@ def run_meta_train(model=None, dataset=None, config_file_list=None, config_dict=
     trainer = MetaLearningTrainer(config, model)
 
     # model training
-    best_train_loss = trainer.meta_fit(train_data, saved=saved, show_progress=False)
+    best_train_loss, task_loss = trainer.meta_fit(train_data, saved=saved, show_progress=False)
 
     logger.info(set_color('best train loss', 'yellow') + f': {best_train_loss}')
-    logger.info(set_color('meta model file', 'yellow') + f': {trainer.saved_meta_model_file}')
+    logger.info(set_color('task loss', 'yellow') + f': {task_loss}')
 
     return trainer.saved_meta_model_file
 
