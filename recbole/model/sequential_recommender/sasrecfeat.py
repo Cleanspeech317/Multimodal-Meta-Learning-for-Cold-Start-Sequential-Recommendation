@@ -53,6 +53,7 @@ class SASRecFeat(SequentialRecommender):
                 item_feat[item_id] = emb
         self.item_feat = nn.Parameter(item_feat.to(config['device']))
         self.item_projection = nn.Linear(self.item_feat.size(-1), self.hidden_size)
+        self.restore_item_e = None
 
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
         self.trm_encoder = TransformerEncoder(
@@ -78,6 +79,7 @@ class SASRecFeat(SequentialRecommender):
 
         # parameters initialization
         self.apply(self._init_weights)
+        self.other_parameter_name = ['restore_item_e']
 
     def _init_weights(self, module):
         """ Initialize the weights """
@@ -117,6 +119,9 @@ class SASRecFeat(SequentialRecommender):
         return output  # [B H]
 
     def calculate_loss(self, interaction):
+        # clear the storage variable when training
+        if self.restore_item_e is not None:
+            self.restore_item_e = None
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         seq_output = self.forward(item_seq, item_seq_len)
@@ -148,6 +153,8 @@ class SASRecFeat(SequentialRecommender):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         seq_output = self.forward(item_seq, item_seq_len)
-        test_items_emb = self.item_projection(self.item_feat)
+        if self.restore_item_e is None:
+            self.restore_item_e = self.item_projection(self.item_feat)
+        test_items_emb = self.restore_item_e
         scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1))  # [B n_items]
         return scores
