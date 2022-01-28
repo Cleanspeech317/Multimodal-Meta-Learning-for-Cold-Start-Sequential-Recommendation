@@ -37,7 +37,7 @@ class SASRecF(SequentialRecommender):
         self.selected_features = config['selected_features']
         self.pooling_mode = config['pooling_mode']
         self.device = config['device']
-        self.num_feature_field = len(config['selected_features'])
+        self.num_feature_field = sum(dataset.num(field) for field in config['selected_features'])
 
         self.initializer_range = config['initializer_range']
         self.loss_type = config['loss_type']
@@ -90,17 +90,10 @@ class SASRecF(SequentialRecommender):
 
     def get_attention_mask(self, item_seq):
         """Generate left-to-right uni-directional attention mask for multi-head attention."""
-        attention_mask = (item_seq > 0).long()
-        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # torch.int64
-        # mask for left-to-right unidirectional
-        max_len = attention_mask.size(-1)
-        attn_shape = (1, max_len, max_len)
-        subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1)  # torch.uint8
-        subsequent_mask = (subsequent_mask == 0).unsqueeze(1)
-        subsequent_mask = subsequent_mask.long().to(item_seq.device)
-        extended_attention_mask = extended_attention_mask * subsequent_mask
-        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
-        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        attention_mask = (item_seq != 0)
+        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # torch.bool
+        extended_attention_mask = torch.tril(extended_attention_mask.expand((-1, -1, item_seq.size(-1), -1)))
+        extended_attention_mask = torch.where(extended_attention_mask, 0., -10000.)
         return extended_attention_mask
 
     def forward(self, item_seq, item_seq_len):
