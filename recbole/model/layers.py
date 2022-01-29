@@ -1266,3 +1266,55 @@ class SparseDropout(nn.Module):
         rc = x._indices()[:, mask]
         val = x._values()[mask] * (1.0 / self.kprob)
         return torch.sparse.FloatTensor(rc, val, x.shape)
+
+
+class ItemGenerator(nn.Module):
+    def __init__(self, config, pretrained_item_emb):
+        super(ItemGenerator, self).__init__()
+        self.pretrained_item_emb = pretrained_item_emb
+        self.generate_rate = config['generate_rate']
+        self.hidden_size = config['hidden_size']
+        item_attr_emb = torch.load(config['item_attr_emb_file'])
+        self.attr_emb_size = item_attr_emb.size(-1)
+        self.register_buffer('item_attr_emb_table', item_attr_emb)
+
+        item_neighbour = torch.load(config['item_neighbour_file'])
+        self.item_neighbour_num = config['item_neighbour_num']
+        self.register_buffer('item_neighbour', item_neighbour[:, :self.item_neighbour_num])
+
+        self.proj_emb_size = config['proj_emb_size']
+        self.proj = nn.Linear(self.attr_emb_size, self.proj_emb_size)
+        self.attention = nn.Linear(2 * self.proj_emb_size, 1)
+        self.leaky_relu = nn.LeakyReLU(config['leaky_slope'])
+        self.softmax = nn.Softmax(dim=-1)
+        self.elu = nn.ELU()
+        self.linear = nn.Linear(self.proj_emb_size, self.hidden_size)
+        self.tanh = nn.Tanh()
+        self.gamma = config['gamma']
+
+    def generate_item_emb(self, item):  #  [B] or [B L]
+        item_attr_emb = self.item_attr_emb_table[item]  # [B E] or [B L E]
+        item_neighbour = self.item_neighbour[item]   # [B K] or [B L K]
+        item_neighbour_attr_emb = self.item_attr_emb_table[item_neighbour]  # [B K E] or [B L K E]
+        # all_item_attr_emb.shape = [B (K+1) E] or [B L (K+1) E]
+        all_item_attr_emb = torch.cat([item_attr_emb.unsqueeze(-2), item_neighbour_attr_emb], dim=-2)
+        all_item_proj_emb = self.proj(all_item_attr_emb)  # [B (K+1) e] or [B L (K+1) e]
+        item_proj_emb, _ = all_item_proj_emb.split([1, self.item_neighbour_num], dim=-2)  # [B 1 e] or [B L 1 e]
+        item_proj_emb = item_proj_emb.expand_as(all_item_proj_emb)  # [B (K+1) e] or [B L (K+1) e]
+        attention_emb = torch.cat([item_proj_emb, all_item_proj_emb], dim=-1)  # [B (K+1) 2e] or [B L (K+1) 2e]
+        attention_weight = self.attention(attention_emb).squeeze(-1)  # [B (K+1)] or [B L (K+1)]
+        attention_weight = self.leaky_relu(attention_weight)  # [B (K+1)] or [B L (K+1)]
+        attention_weight = self.softmax(attention_weight)  # [B (K+1)] or [B L (K+1)]
+        fusion_emb = (all_item_proj_emb * attention_weight.unsqueeze(-1)).sum(-2)  # [B e] or [B L e]
+        fusion_emb = self.elu(fusion_emb)  # [B e] or [B L e]
+        final_emb = self.linear(fusion_emb)  # [B E] or [B L E]
+        final_emb = self.gamma * self.tanh(final_emb)
+        return final_emb
+
+    def forward(self, item):
+        generated_item_emb = self.generate_item_emb(item)
+        pretrained_item_emb = self.pretrained_item_emb(item)  # [B E] or [B L E]
+        mask = (torch.rand(item.shape, device=item.device) < self.generate_rate)
+        mask = mask.unsqueeze(-1).expand_as(generated_item_emb)
+        item_emb = torch.where(mask, generated_item_emb, pretrained_item_emb)  # [B E] or [B L E]
+        return item_emb

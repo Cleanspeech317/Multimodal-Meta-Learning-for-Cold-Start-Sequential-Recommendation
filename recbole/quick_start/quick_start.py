@@ -12,11 +12,13 @@ from logging import getLogger
 
 import torch
 import pickle
+import numpy as np
 
 from recbole.config import Config
 from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders, \
     MetaLearningDataLoader
 from recbole.data.dataset import MetaSeqDataset, MetaTrainDataset, MetaTestDataset
+from recbole.model.layers import ItemGenerator
 from recbole.trainer import MetaLearningTrainer, MetaTestTrainer, MetaFusionTrainer
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
@@ -362,3 +364,53 @@ def run_meta_fusion_test(model_name_list=None, dataset=None, config_file_lists=N
 
     return test_summarize
 
+
+def run_emb_gen_train(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True):
+    # configurations initialization
+    config = Config(model=model, dataset=dataset, config_file_list=config_file_list, config_dict=config_dict)
+    init_seed(config['seed'], config['reproducibility'])
+    # logger initialization
+    init_logger(config)
+    logger = getLogger()
+
+    logger.info(config)
+
+    # dataset filtering
+    dataset = MetaTrainDataset(config)
+    logger.info(dataset)
+
+    # dataset splitting
+    train_data = dataset.build()
+    train_data = MetaLearningDataLoader(config, dataset, train_data)
+
+    # model loading and initialization
+    init_seed(config['seed'], config['reproducibility'])
+    model = get_model(config['model'])(config, train_data.dataset)
+    checkpoint = torch.load(config['model_file'])
+    model.load_state_dict(checkpoint['state_dict'])
+    model.requires_grad_(False)
+    model.item_embedding = ItemGenerator(config, model.item_embedding)
+    model = model.to(config['device'])
+    logger.info(model)
+
+    # trainer loading and initialization
+    trainer = MetaLearningTrainer(config, model)
+
+    # model training
+    best_train_loss, task_loss = trainer.meta_fit(train_data, saved=saved, show_progress=False)
+
+    item_emb = model.item_embedding.generate_item_emb(torch.arange(dataset.item_num, device=config['device']))
+    old_item_id = torch.from_numpy(np.unique(dataset.inter_feat[dataset.iid_field])).to(device=config['device'])
+    mask = torch.ones(dataset.item_num, dtype=torch.bool, device=config['device'])
+    mask[old_item_id] = 0
+    mask = mask.unsqueeze(-1).expand_as(item_emb)
+    checkpoint['state_dict']['item_embedding.weight'] = torch.where(
+        mask, item_emb, checkpoint['state_dict']['item_embedding.weight']
+    )
+    torch.save(checkpoint, trainer.saved_meta_model_file)
+
+    logger.info(set_color('saved meta model file', 'yellow') + f': {trainer.saved_meta_model_file}')
+    logger.info(set_color('best train loss', 'yellow') + f': {best_train_loss}')
+    logger.info(set_color('task loss', 'yellow') + f': {task_loss}')
+
+    return trainer.saved_meta_model_file
