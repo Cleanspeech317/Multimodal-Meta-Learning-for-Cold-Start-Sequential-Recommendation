@@ -1268,31 +1268,31 @@ class SparseDropout(nn.Module):
         return torch.sparse.FloatTensor(rc, val, x.shape)
 
 
-class ItemGenerator(nn.Module):
-    def __init__(self, config, pretrained_item_emb):
-        super(ItemGenerator, self).__init__()
-        self.pretrained_item_emb = pretrained_item_emb
-        self.generate_rate = config['generate_rate']
-        self.hidden_size = config['hidden_size']
-        item_attr_emb = torch.load(config['item_attr_emb_file'])
+class SingleModalGenerator(nn.Module):
+    def __init__(
+        self, attr_emb_file, neighbour_file, neighbour_num, hidden_size, proj_emb_size, leaky_slope, gamma
+    ):
+        super(SingleModalGenerator, self).__init__()
+        self.hidden_size = hidden_size
+        item_attr_emb = torch.load(attr_emb_file)
         self.attr_emb_size = item_attr_emb.size(-1)
         self.register_buffer('item_attr_emb_table', item_attr_emb)
 
-        item_neighbour = torch.load(config['item_neighbour_file'])
-        self.item_neighbour_num = config['item_neighbour_num']
+        item_neighbour = torch.load(neighbour_file)
+        self.item_neighbour_num = neighbour_num
         self.register_buffer('item_neighbour', item_neighbour[:, :self.item_neighbour_num])
 
-        self.proj_emb_size = config['proj_emb_size']
+        self.proj_emb_size = proj_emb_size
         self.proj = nn.Linear(self.attr_emb_size, self.proj_emb_size)
         self.attention = nn.Linear(2 * self.proj_emb_size, 1)
-        self.leaky_relu = nn.LeakyReLU(config['leaky_slope'])
+        self.leaky_relu = nn.LeakyReLU(leaky_slope)
         self.softmax = nn.Softmax(dim=-1)
         self.elu = nn.ELU()
         self.linear = nn.Linear(self.proj_emb_size, self.hidden_size)
         self.tanh = nn.Tanh()
-        self.gamma = config['gamma']
+        self.gamma = gamma
 
-    def generate_item_emb(self, item):  #  [B] or [B L]
+    def forward(self, item):  #  [B] or [B L]
         item_attr_emb = self.item_attr_emb_table[item]  # [B E] or [B L E]
         item_neighbour = self.item_neighbour[item]   # [B K] or [B L K]
         item_neighbour_attr_emb = self.item_attr_emb_table[item_neighbour]  # [B K E] or [B L K E]
@@ -1310,6 +1310,37 @@ class ItemGenerator(nn.Module):
         final_emb = self.linear(fusion_emb)  # [B E] or [B L E]
         final_emb = self.gamma * self.tanh(final_emb)
         return final_emb
+
+
+class ItemGenerator(nn.Module):
+    def __init__(self, config, pretrained_item_emb):
+        super(ItemGenerator, self).__init__()
+        self.pretrained_item_emb = pretrained_item_emb
+        self.generate_rate = config['generate_rate']
+        attr_emb_file_list = config['item_attr_emb_file']
+        neighbour_file_list = config['item_neighbour_file']
+        if isinstance(attr_emb_file_list, str):
+            attr_emb_file_list = [attr_emb_file_list]
+        if isinstance(neighbour_file_list, str):
+            neighbour_file_list = [neighbour_file_list]
+        assert len(attr_emb_file_list) == len(neighbour_file_list)
+
+        generator_kwargs = {
+            'neighbour_num': config['item_neighbour_num'],
+            'hidden_size': config['hidden_size'],
+            'proj_emb_size': config['proj_emb_size'],
+            'leaky_slope': config['leaky_slope'],
+            'gamma': config['gamma'],
+        }
+        self.generator_list = nn.ModuleList([
+            SingleModalGenerator(attr_emb_file, neighbour_file, **generator_kwargs)
+            for attr_emb_file, neighbour_file in zip(attr_emb_file_list, neighbour_file_list)
+        ])
+
+    def generate_item_emb(self, item):
+        generated_item_emb_list = torch.stack([generator(item) for generator in self.generator_list])
+        generated_item_emb = generated_item_emb_list.mean(dim=0)
+        return generated_item_emb
 
     def forward(self, item):
         generated_item_emb = self.generate_item_emb(item)
