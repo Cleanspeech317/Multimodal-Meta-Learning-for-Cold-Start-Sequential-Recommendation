@@ -33,7 +33,7 @@ from recbole.data.interaction import Interaction
 from recbole.data.dataloader import FullSortEvalDataLoader
 from recbole.evaluator import Evaluator, Collector
 from recbole.utils import ensure_dir, get_local_time, early_stopping, calculate_valid_score, dict2str, \
-    EvaluatorType, KGDataLoaderState, get_tensorboard, set_color, get_gpu_usage
+    EvaluatorType, KGDataLoaderState, get_tensorboard, set_color, get_gpu_usage, init_seed
 
 
 class AbstractTrainer(object):
@@ -1342,6 +1342,7 @@ class MetaTestTrainer(Trainer):
             self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
             self.best_valid_result = None
             self.train_loss_dict = dict()
+            init_seed(self.config['seed'], self.config['reproducibility'])
             _, valid_result = self.fit(train_data, valid_data, verbose=False, saved=saved, show_progress=False)
             test_result = self.evaluate(test_data, load_best_model=load_best_model, show_progress=False)
             task_valid_result[task] = valid_result
@@ -1352,9 +1353,9 @@ class MetaTestTrainer(Trainer):
         return task_valid_result, task_test_result
 
 
-class FusionModel(nn.Module):
+class WeightFusionModel(nn.Module):
     def __init__(self, config, model_list):
-        super(FusionModel, self).__init__()
+        super(WeightFusionModel, self).__init__()
         self.config = config
         self.fusion_weight = torch.tensor(config['fusion_weight'], device=config['device'])
         self.model_list = nn.ModuleList(model_list)
@@ -1366,6 +1367,7 @@ class FusionModel(nn.Module):
 
     def fusion(self, scores_list):
         weight = self.fusion_weight.view(-1, *((1,) * (scores_list.dim() - 1)))
+        scores_list = (scores_list - scores_list.mean(-1, keepdim=True)) / scores_list.std(-1, keepdim=True)
         return (weight * scores_list).sum(0)
 
     def predict(self, interaction):
@@ -1380,7 +1382,7 @@ class FusionModel(nn.Module):
 class MetaFusionTrainer(Trainer):
     def __init__(self, config_list, model_list):
         config = config_list[0]
-        self.fusion_model = FusionModel(config, model_list)
+        self.fusion_model = WeightFusionModel(config, model_list)
         super(MetaFusionTrainer, self).__init__(config, self.fusion_model)
         params = [
             {
@@ -1412,6 +1414,8 @@ class MetaFusionTrainer(Trainer):
 
     def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
         self.checkpoint_list = []
+        tmp_train_data = copy.deepcopy(train_data)
+        tmp_valid_data = copy.deepcopy(valid_data)
         for model in self.fusion_model.model_list:
             self.model = model
             self.start_epoch = 0
@@ -1419,12 +1423,15 @@ class MetaFusionTrainer(Trainer):
             self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
             self.best_valid_result = None
             self.train_loss_dict = dict()
+            train_data = copy.deepcopy(tmp_train_data)
+            valid_data = copy.deepcopy(tmp_valid_data)
+            init_seed(self.config['seed'], self.config['reproducibility'])
             _, _ = super(MetaFusionTrainer, self).fit(
                 train_data, valid_data, verbose, saved, show_progress, callback_fn
             )
             self.checkpoint_list.append(self.checkpoint)
         self.model = self.fusion_model
-        return self._valid_epoch(valid_data, show_progress)
+        return self._valid_epoch(tmp_valid_data, show_progress)
 
     @torch.no_grad()
     def evaluate(self, eval_data, load_best_model=True, model_file=None, show_progress=False):
@@ -1432,7 +1439,7 @@ class MetaFusionTrainer(Trainer):
             return
 
         if load_best_model:
-            assert isinstance(self.model, FusionModel)
+            assert isinstance(self.model, WeightFusionModel)
             self.model.load_checkpoint(self.checkpoint_list)
 
         self.model.eval()
@@ -1486,4 +1493,3 @@ class MetaFusionTrainer(Trainer):
             task_test_result[task] = test_result
 
         return task_valid_result, task_test_result
-
