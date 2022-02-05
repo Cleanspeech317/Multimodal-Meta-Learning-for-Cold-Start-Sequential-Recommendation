@@ -32,6 +32,7 @@ from tqdm import tqdm
 from recbole.data.interaction import Interaction
 from recbole.data.dataloader import FullSortEvalDataLoader
 from recbole.evaluator import Evaluator, Collector
+from recbole.model.layers import MLPLayers
 from recbole.utils import ensure_dir, get_local_time, early_stopping, calculate_valid_score, dict2str, \
     EvaluatorType, KGDataLoaderState, get_tensorboard, set_color, get_gpu_usage, init_seed
 
@@ -1366,23 +1367,335 @@ class WeightFusionModel(nn.Module):
             model.load_other_parameter(checkpoint.get('other_parameter'))
 
     def fusion(self, scores_list):
-        weight = self.fusion_weight.view(-1, *((1,) * (scores_list.dim() - 1)))
+        new_weight_shape = [1] * scores_list.dim()
+        new_weight_shape[1] = -1
+        weight = self.fusion_weight.view(*new_weight_shape)
         scores_list = (scores_list - scores_list.mean(-1, keepdim=True)) / scores_list.std(-1, keepdim=True)
-        return (weight * scores_list).sum(0)
+        return (weight * scores_list).sum(1)
 
     def predict(self, interaction):
-        scores_list = torch.stack([model.predict(interaction) for model in self.model_list])
+        scores_list = torch.stack([model.predict(interaction) for model in self.model_list], dim=1)
         return self.fusion(scores_list)
 
     def full_sort_predict(self, interaction):
-        scores_list = torch.stack([model.full_sort_predict(interaction) for model in self.model_list])
+        scores_list = torch.stack([model.full_sort_predict(interaction) for model in self.model_list], dim=1)
         return self.fusion(scores_list)
+
+
+class AttentionModule(nn.Module):
+    def __init__(self, input_size, mlp_hidden_size, scores_size):
+        super(AttentionModule, self).__init__()
+        self.input_layer_norm = nn.LayerNorm(input_size)
+        self.mlp = MLPLayers([input_size] + mlp_hidden_size + [1])
+        self.softmax = nn.Softmax(dim=-2)
+        self.scores_layer_norm = nn.LayerNorm(scores_size)
+        self.loss_fct = nn.CrossEntropyLoss()
+
+    def forward(self, last_layer_list, scores_list):  # tensor_list: [B 3 E]  scores_list: [B 3 I]
+        last_layer_list = self.input_layer_norm(last_layer_list)  # [B 3 E]
+        attention = self.mlp(last_layer_list)  # [B 3 1]
+        attention = self.softmax(attention)  # [B 3 1]
+        scores_list = self.scores_layer_norm(scores_list)  # [B 3 I]
+        fusion_score = (attention * scores_list).sum(1)  # [B I]
+        return fusion_score
+
+    def calculate_loss(self, last_layer_list, scores_list, pos_items):
+        logits = self.forward(last_layer_list, scores_list)
+        loss = self.loss_fct(logits, pos_items)
+        return loss
+
+
+class AttentionFusionModel(nn.Module):
+    def __init__(self, config, model_list):
+        super(AttentionFusionModel, self).__init__()
+        self.config = config
+        self.attention_module = AttentionModule(
+            config['MAX_ITEM_LIST_LENGTH'] * config['hidden_size'], config['mlp_hidden_size'], model_list[0].n_items
+        )
+        attention_module_checkpoint = torch.load(config['attention_module_file'])
+        self.attention_module.load_state_dict(attention_module_checkpoint['state_dict'])
+        self.attention_module = self.attention_module.to(config['device'])
+        self.model_list = nn.ModuleList(model_list)
+
+    def load_checkpoint(self, checkpoint_list):
+        for model, checkpoint in zip(self.model_list, checkpoint_list):
+            model.load_state_dict(checkpoint['state_dict'])
+            model.load_other_parameter(checkpoint.get('other_parameter'))
+
+    def fusion(self, last_layer_list, scores_list):
+        return self.attention_module(last_layer_list, scores_list)
+
+    def predict(self, interaction):
+        last_layer_list, scores_list = [], []
+        for model in self.model_list:
+            scores, last_layer = model.predict(interaction, with_last_layer=True)
+            last_layer_list.append(last_layer.view(len(last_layer), -1))  # [B E]
+            scores_list.append(scores)  # [B I]
+        last_layer_list = torch.stack(last_layer_list, dim=1)
+        scores_list = torch.stack(scores_list, dim=1)
+        return self.fusion(last_layer_list, scores_list)
+
+    def full_sort_predict(self, interaction):
+        last_layer_list, scores_list = [], []
+        for model in self.model_list:
+            scores, last_layer = model.full_sort_predict(interaction, with_last_layer=True)
+            last_layer_list.append(last_layer.view(len(last_layer), -1))  # [B E]
+            scores_list.append(scores)  # [B I]
+        last_layer_list = torch.stack(last_layer_list, dim=1)
+        scores_list = torch.stack(scores_list, dim=1)
+        return self.fusion(last_layer_list, scores_list)
+
+
+class AttentionModuleTrainer(Trainer):
+    def __init__(self, config_list, model_list):
+        config = config_list[0]
+        self.fusion_model = WeightFusionModel(config, model_list)
+        super(AttentionModuleTrainer, self).__init__(config, self.fusion_model)
+        params = [
+            {
+                'params': model.parameters(),
+                'lr': model_config['learning_rate'],
+            }
+            for model, model_config in zip(self.fusion_model.model_list, config_list)
+        ]
+        self.optimizer = self._build_optimizer(params=params)
+        self.attention_module_file = config['attention_module_file']
+        self.attention_module = AttentionModule(
+            config['MAX_ITEM_LIST_LENGTH'] * config['hidden_size'], config['mlp_hidden_size'], model_list[0].n_items
+        )
+        self.attention_module = self.attention_module.to(config['device'])
+        self.attention_optimizer = self._build_optimizer(
+            params=self.attention_module.parameters(),
+            learner=config['attention_learner'],
+            learning_rate=config['attention_learning_rate'],
+            weight_decay=config['attention_weight_decay'],
+        )
+        self.attention_start_epoch = 0
+        self.attention_epochs = config['attention_epochs']
+        self.best_valid_loss = np.inf
+
+    def _save_checkpoint(self, epoch, verbose=True, **kwargs):
+        r"""Store the model parameters information and training information.
+
+        Args:
+            epoch (int): the current epoch id
+
+        """
+        state = {
+            'config': self.config,
+            'epoch': epoch,
+            'cur_step': self.cur_step,
+            'best_valid_score': self.best_valid_score,
+            'state_dict': self.model.state_dict(),
+            'other_parameter': self.model.other_parameter(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        self.checkpoint = state
+
+    @torch.no_grad()
+    def _get_last_layer(self, train_data):
+        self.model.eval()
+        checkpoint = self.checkpoint
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.model.load_other_parameter(checkpoint.get('other_parameter'))
+        last_layer_list, scores_list, target_item_list = [], [], []
+        for batch_idx, interaction in enumerate(train_data):
+            interaction = interaction.to(self.device)
+            target_item = interaction[self.model.ITEM_ID]
+            scores, last_layer = self.model.full_sort_predict(interaction, with_last_layer=True)
+            last_layer_list.append(last_layer)
+            scores_list.append(scores)
+            target_item_list.append(target_item)
+        last_layer = torch.cat(last_layer_list, dim=0)
+        scores = torch.cat(scores_list, dim=0)
+        target_item = torch.cat(target_item_list, dim=0)
+        return last_layer, scores, target_item  # [B E], [B I], [B]
+
+    def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
+        tmp_train_data = copy.deepcopy(train_data)
+        tmp_valid_data = copy.deepcopy(valid_data)
+        train_last_layer_list, valid_last_layer_list = [], []
+        train_scores_list, valid_scores_list = [], []
+        train_item = valid_item = None
+        for model in self.fusion_model.model_list:
+            self.model = model
+            self.start_epoch = 0
+            self.cur_step = 0
+            self.best_valid_score = -np.inf if self.valid_metric_bigger else np.inf
+            self.best_valid_result = None
+            self.train_loss_dict = dict()
+            train_data = copy.deepcopy(tmp_train_data)
+            valid_data = copy.deepcopy(tmp_valid_data)
+            init_seed(self.config['seed'], self.config['reproducibility'])
+            _, _ = super(AttentionModuleTrainer, self).fit(
+                train_data, None, verbose, saved, show_progress, callback_fn
+            )
+            train_last_layer, train_scores, train_item = self._get_last_layer(train_data)
+            valid_last_layer, valid_scores, valid_item = self._get_last_layer(valid_data)
+            train_last_layer_list.append(train_last_layer)
+            valid_last_layer_list.append(valid_last_layer)
+            train_scores_list.append(train_scores)
+            valid_scores_list.append(valid_scores)
+        train_last_layer = torch.stack(train_last_layer_list, dim=1)  # [B 3 E]
+        valid_last_layer = torch.stack(valid_last_layer_list, dim=1)  # [B 3 E]
+        train_scores = torch.stack(train_scores_list, dim=1)  # [B 3 I]
+        valid_scores = torch.stack(valid_scores_list, dim=1)  # [B 3 I]
+        return train_last_layer, train_scores, train_item, valid_last_layer, valid_scores, valid_item
+
+    def construct_data(
+        self, train_data, meta_model_file=None, saved=True, show_progress=False
+    ):
+        init_checkpoint_list = [torch.load(file) for file in meta_model_file]
+        iter_data = (
+            tqdm(
+                train_data.meta_learning_dataloaders.items(),
+                total=len(train_data.meta_learning_dataloaders),
+                ncols=100,
+                desc=set_color(f"Construct   ", 'pink'),
+            ) if show_progress else train_data.meta_learning_dataloaders.items()
+        )
+        train_last_layer_list, valid_last_layer_list = [], []
+        train_scores_list, valid_scores_list = [], []
+        train_item_list, valid_item_list = [], []
+        for task, (support_data, query_data) in iter_data:
+            self.fusion_model.load_checkpoint(init_checkpoint_list)
+            train_last_layer, train_scores, train_item, valid_last_layer, valid_scores, valid_item = self.fit(
+                support_data, query_data, verbose=False, saved=saved, show_progress=False
+            )
+            train_last_layer_list.append(train_last_layer)
+            valid_last_layer_list.append(valid_last_layer)
+            train_scores_list.append(train_scores)
+            valid_scores_list.append(valid_scores)
+            train_item_list.append(train_item)
+            valid_item_list.append(valid_item)
+        train_last_layer = torch.cat(train_last_layer_list, dim=0)
+        valid_last_layer = torch.cat(valid_last_layer_list, dim=0)
+        train_scores = torch.cat(train_scores_list, dim=0)
+        valid_scores = torch.cat(valid_scores_list, dim=0)
+        train_item = torch.cat(train_item_list, dim=0)
+        valid_item = torch.cat(valid_item_list, dim=0)
+        return train_last_layer, train_scores, train_item, valid_last_layer, valid_scores, valid_item
+
+    def _save_attention_module(self, epoch, verbose=True, **kwargs):
+        saved_model_file = kwargs.pop('saved_model_file', self.attention_module_file)
+        state = {
+            'config': self.config,
+            'epoch': epoch,
+            'cur_step': self.cur_step,
+            'best_valid_score': self.best_valid_score,
+            'state_dict': self.attention_module.state_dict(),
+            'optimizer': self.attention_optimizer.state_dict(),
+        }
+        torch.save(state, saved_model_file)
+        if verbose:
+            self.logger.info(set_color('Saving current', 'blue') + f': {saved_model_file}')
+
+    def _attention_train_epoch(self, train_data, epoch_idx, show_progress=False):
+        self.attention_module.train()
+        total_loss = 0.0
+        iter_data = (
+            tqdm(
+                train_data,
+                total=len(train_data),
+                ncols=100,
+                desc=set_color(f"Train {epoch_idx:>5}", 'pink'),
+            ) if show_progress else train_data
+        )
+        for batch_idx, (last_layer, scores, pos_item) in enumerate(iter_data):
+            self.attention_optimizer.zero_grad()
+            loss = self.attention_module.calculate_loss(last_layer, scores, pos_item)
+            total_loss = total_loss + loss.item()
+            self._check_nan(loss)
+            loss.backward()
+            if self.clip_grad_norm:
+                clip_grad_norm_(self.attention_module.parameters(), **self.clip_grad_norm)
+            self.attention_optimizer.step()
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+        return total_loss
+
+    @torch.no_grad()
+    def _attention_valid_epoch(self, valid_data, show_progress=False):
+        self.attention_module.eval()
+        total_loss = 0.0
+        iter_data = (
+            tqdm(
+                valid_data,
+                total=len(valid_data),
+                ncols=100,
+                desc=set_color(f"Evaluate   ", 'pink'),
+            ) if show_progress else valid_data
+        )
+        for batch_idx, (last_layer, scores, pos_item) in enumerate(iter_data):
+            loss = self.attention_module.calculate_loss(last_layer, scores, pos_item)
+            total_loss = total_loss + loss.item()
+            self._check_nan(loss)
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+        return total_loss
+
+    def attention_module_training(
+        self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False
+    ):
+        if saved and self.attention_start_epoch >= self.attention_epochs:
+            self._save_attention_module(-1, verbose=verbose)
+
+        for epoch_idx in range(self.attention_start_epoch, self.attention_epochs):
+            # train
+            training_start_time = time()
+            train_loss = self._attention_train_epoch(train_data, epoch_idx, show_progress=show_progress)
+            self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
+            training_end_time = time()
+            train_loss_output = \
+                self._generate_train_loss_output(epoch_idx, training_start_time, training_end_time, train_loss)
+            if verbose:
+                self.logger.info(train_loss_output)
+            self._add_train_loss_to_tensorboard(epoch_idx, train_loss)
+
+            # eval
+            if self.eval_step <= 0 or not valid_data:
+                if saved:
+                    self._save_attention_module(epoch_idx, verbose=verbose)
+                continue
+            if (epoch_idx + 1) % self.eval_step == 0:
+                valid_start_time = time()
+                valid_loss = self._attention_valid_epoch(valid_data, show_progress=show_progress)
+                self.best_valid_loss, self.cur_step, stop_flag, update_flag = early_stopping(
+                    valid_loss,
+                    self.best_valid_loss,
+                    self.cur_step,
+                    max_step=self.stopping_step,
+                    bigger=False,
+                )
+                valid_end_time = time()
+                valid_loss_output = (set_color("epoch %d evaluating", 'green') + " [" + set_color("time", 'blue')
+                                    + ": %.2fs, " + set_color("valid_score", 'blue') + ": %f]") % \
+                                     (epoch_idx, valid_end_time - valid_start_time, valid_loss)
+                if verbose:
+                    self.logger.info(valid_loss_output)
+                self.tensorboard.add_scalar('Vaild_loss', valid_loss, epoch_idx)
+
+                if update_flag:
+                    if saved:
+                        self._save_attention_module(epoch_idx, verbose=verbose)
+
+                if stop_flag:
+                    stop_output = 'Finished training, best eval loss in epoch %d' % \
+                                  (epoch_idx - self.cur_step * self.eval_step)
+                    if verbose:
+                        self.logger.info(stop_output)
+                    break
+        self._add_hparam_to_tensorboard(self.best_valid_loss)
+        return self.best_valid_loss
 
 
 class MetaFusionTrainer(Trainer):
     def __init__(self, config_list, model_list):
         config = config_list[0]
-        self.fusion_model = WeightFusionModel(config, model_list)
+        if config['fusion_method'] != 'attention_method':
+            self.fusion_model = WeightFusionModel(config, model_list)
+        else:
+            self.fusion_model = AttentionFusionModel(config, model_list)
         super(MetaFusionTrainer, self).__init__(config, self.fusion_model)
         params = [
             {
@@ -1439,7 +1752,7 @@ class MetaFusionTrainer(Trainer):
             return
 
         if load_best_model:
-            assert isinstance(self.model, WeightFusionModel)
+            assert isinstance(self.model, (WeightFusionModel, AttentionFusionModel))
             self.model.load_checkpoint(self.checkpoint_list)
 
         self.model.eval()

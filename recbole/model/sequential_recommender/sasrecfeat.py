@@ -101,7 +101,7 @@ class SASRecFeat(SequentialRecommender):
         extended_attention_mask = torch.where(extended_attention_mask, 0., -10000.)
         return extended_attention_mask
 
-    def forward(self, item_seq, item_seq_len):
+    def forward(self, item_seq, item_seq_len, with_last_layer=False):
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
@@ -114,8 +114,10 @@ class SASRecFeat(SequentialRecommender):
         extended_attention_mask = self.get_attention_mask(item_seq)
 
         trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
-        output = trm_output[-1]
-        output = self.gather_indexes(output, item_seq_len - 1)
+        last_layer = trm_output[-1]
+        output = self.gather_indexes(last_layer, item_seq_len - 1)
+        if with_last_layer:
+            return output, last_layer
         return output  # [B H]
 
     def calculate_loss(self, interaction):
@@ -140,21 +142,29 @@ class SASRecFeat(SequentialRecommender):
             loss = self.loss_fct(logits, pos_items)
             return loss
 
-    def predict(self, interaction):
+    def predict(self, interaction, with_last_layer=False):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         test_item = interaction[self.ITEM_ID]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output = self.forward(item_seq, item_seq_len, with_last_layer=with_last_layer)
+        if with_last_layer:
+            seq_output, last_layer = seq_output
         test_item_emb = self.item_projection(self.item_feat[test_item])
         scores = torch.mul(seq_output, test_item_emb).sum(dim=1)  # [B]
+        if with_last_layer:
+            return scores, last_layer.view(len(last_layer), -1)
         return scores
 
-    def full_sort_predict(self, interaction):
+    def full_sort_predict(self, interaction, with_last_layer=False):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
-        seq_output = self.forward(item_seq, item_seq_len)
+        seq_output = self.forward(item_seq, item_seq_len, with_last_layer=with_last_layer)
+        if with_last_layer:
+            seq_output, last_layer = seq_output
         if self.restore_item_e is None:
             self.restore_item_e = self.item_projection(self.item_feat)
         test_items_emb = self.restore_item_e
         scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1))  # [B n_items]
+        if with_last_layer:
+            return scores, last_layer.view(len(last_layer), -1)
         return scores

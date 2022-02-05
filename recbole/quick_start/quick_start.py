@@ -7,10 +7,12 @@ recbole.quick_start
 ########################
 """
 import logging
+import os.path
 from collections import OrderedDict
 from logging import getLogger
 
 import torch
+from torch.utils.data import Dataset, DataLoader
 import pickle
 import numpy as np
 
@@ -19,7 +21,7 @@ from recbole.data import create_dataset, data_preparation, save_split_dataloader
     MetaLearningDataLoader
 from recbole.data.dataset import MetaSeqDataset, MetaTrainDataset, MetaTestDataset
 from recbole.model.layers import ItemGenerator
-from recbole.trainer import MetaLearningTrainer, MetaTestTrainer, MetaFusionTrainer
+from recbole.trainer import MetaLearningTrainer, MetaTestTrainer, MetaFusionTrainer, AttentionModuleTrainer
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 
@@ -301,6 +303,81 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
     logger.info(set_color('test result', 'yellow') + f': {test_result}')
 
     return test_summarize
+
+
+class AttentionDataset(Dataset):
+    def __init__(self, last_layer, scores, pos_items):
+        assert len(last_layer) == len(scores) == len(pos_items)
+        self.length = len(last_layer)
+        self.last_layer = last_layer
+        self.scores = scores
+        self.pos_items = pos_items
+
+    def __getitem__(self, index):
+        return self.last_layer[index], self.scores[index], self.pos_items[index]
+
+    def __len__(self):
+        return self.length
+
+
+def run_attention_fusion_train(
+    model_name_list=None, dataset=None, config_file_lists=None, config_dict=None, saved=True
+):
+    # configurations initialization
+    config_list = []
+    for model, config_file_list in zip(model_name_list, config_file_lists):
+        config = Config(model=model, dataset=dataset, config_file_list=config_file_list, config_dict=config_dict)
+        config_list.append(config)
+    config = config_list[0]
+
+    init_seed(config['seed'], config['reproducibility'])
+    # logger initialization
+    init_logger(config)
+    logger = getLogger()
+
+    logger.info(config)
+
+    # dataset filtering
+    dataset = MetaTrainDataset(config)
+    logger.info(dataset)
+
+    # dataset splitting
+    test_data = dataset.build()
+    test_data = MetaLearningDataLoader(config, dataset, test_data, shuffle=False)
+
+    # model loading and initialization
+    model_list = []
+    for model_config in config_list:
+        init_seed(model_config['seed'], model_config['reproducibility'])
+        model = get_model(model_config['model'])(model_config, test_data.dataset).to(model_config['device'])
+        logger.info(model)
+        model_list.append(model)
+
+    # trainer loading and initialization
+    trainer = AttentionModuleTrainer(config_list, model_list)
+
+    attention_data_path = config['attention_data_path']
+    if os.path.exists(attention_data_path):
+        train_attention_dataloader, valid_attention_dataloader = torch.load(attention_data_path)
+    else:
+        # create training data
+        train_last_layer, train_scores, train_item, valid_last_layer, valid_scores, valid_item = trainer.construct_data(
+            test_data, meta_model_file=config['model_file'], show_progress=config['show_progress']
+        )
+
+        train_attention_dataset = AttentionDataset(train_last_layer, train_scores, train_item)
+        valid_attention_dataset = AttentionDataset(valid_last_layer, valid_scores, valid_item)
+        train_attention_dataloader = DataLoader(dataset=train_attention_dataset, batch_size=config['train_batch_size'])
+        valid_attention_dataloader = DataLoader(dataset=valid_attention_dataset, batch_size=config['train_batch_size'])
+        torch.save((train_attention_dataloader, valid_attention_dataloader), attention_data_path)
+
+    best_valid_loss = trainer.attention_module_training(
+        train_attention_dataloader, valid_attention_dataloader, saved=saved, show_progress=config['show_progress']
+    )
+
+    logger.info(set_color('best valid loss', 'yellow') + f': {best_valid_loss}')
+
+    return best_valid_loss
 
 
 def run_meta_fusion_test(model_name_list=None, dataset=None, config_file_lists=None, config_dict=None, saved=True):
