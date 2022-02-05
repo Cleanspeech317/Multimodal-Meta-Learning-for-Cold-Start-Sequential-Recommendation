@@ -341,6 +341,15 @@ class Config(object):
                 and self.final_config_dict['eval_type'] == EvaluatorType.VALUE):
             raise NotImplementedError('Full sort evaluation do not match value-based metrics!')
 
+        if self.final_config_dict['attention_data_path'] is None:
+            self.final_config_dict['attention_data_path'] = os.path.join(
+                self.final_config_dict['checkpoint_dir'], f'{self.dataset}-attention_data.pth'
+            )
+        if self.final_config_dict['attention_module_file'] is None:
+            self.final_config_dict['attention_module_file'] = os.path.join(
+                self.final_config_dict['checkpoint_dir'], f'{self.dataset}-attention_module.pth'
+            )
+
     def _init_device(self):
         use_gpu = self.final_config_dict['use_gpu']
         if use_gpu:
