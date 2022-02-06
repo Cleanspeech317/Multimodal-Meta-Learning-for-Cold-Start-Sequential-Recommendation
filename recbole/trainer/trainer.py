@@ -1509,7 +1509,7 @@ class AttentionModuleTrainer(Trainer):
         last_layer = torch.cat(last_layer_list, dim=0)
         scores = torch.cat(scores_list, dim=0)
         target_item = torch.cat(target_item_list, dim=0)
-        return last_layer, scores, target_item  # [B E], [B I], [B]
+        return last_layer.cpu(), scores.cpu(), target_item.cpu()  # [B E], [B I], [B]
 
     def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
         tmp_train_data = copy.deepcopy(train_data)
@@ -1602,6 +1602,9 @@ class AttentionModuleTrainer(Trainer):
             ) if show_progress else train_data
         )
         for batch_idx, (last_layer, scores, pos_item) in enumerate(iter_data):
+            last_layer = last_layer.to(self.device)
+            scores = scores.to(self.device)
+            pos_item = pos_item.to(self.device)
             self.attention_optimizer.zero_grad()
             loss = self.attention_module.calculate_loss(last_layer, scores, pos_item)
             total_loss = total_loss + loss.item()
@@ -1627,6 +1630,9 @@ class AttentionModuleTrainer(Trainer):
             ) if show_progress else valid_data
         )
         for batch_idx, (last_layer, scores, pos_item) in enumerate(iter_data):
+            last_layer = last_layer.to(self.device)
+            scores = scores.to(self.device)
+            pos_item = pos_item.to(self.device)
             loss = self.attention_module.calculate_loss(last_layer, scores, pos_item)
             total_loss = total_loss + loss.item()
             self._check_nan(loss)
