@@ -45,12 +45,15 @@ class SASRecFeat(SequentialRecommender):
         # define layers and loss
         # self.item_embedding = nn.Embedding(self.n_items, self.hidden_size, padding_idx=0)
         item_emb = torch.load(config['item_feat_emb'])
-        item_feat = torch.zeros((dataset.item_num, item_emb['embs'].size(-1)))
-        token2id = dataset.field2token_id[dataset.iid_field]
-        for item, emb in zip(item_emb['item_id'], item_emb['embs']):
-            if item in token2id:
-                item_id = token2id[item]
-                item_feat[item_id] = emb
+        if isinstance(item_emb, dict):
+            item_feat = torch.zeros((dataset.item_num, item_emb['embs'].size(-1)))
+            token2id = dataset.field2token_id[dataset.iid_field]
+            for item, emb in zip(item_emb['item_id'], item_emb['embs']):
+                if item in token2id:
+                    item_id = token2id[item]
+                    item_feat[item_id] = emb
+        else:
+            item_feat = item_emb
         self.item_feat = nn.Parameter(item_feat.to(config['device']))
         self.item_projection = nn.Linear(self.item_feat.size(-1), self.hidden_size)
         self.restore_item_e = None
