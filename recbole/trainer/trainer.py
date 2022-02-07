@@ -1459,6 +1459,7 @@ class AttentionModuleTrainer(Trainer):
             for model, model_config in zip(self.fusion_model.model_list, config_list)
         ]
         self.optimizer = self._build_optimizer(params=params)
+        self.construct_data_rate = config['construct_data_rate'] or 1.0
         self.attention_module_file = config['attention_module_file']
         self.attention_module = AttentionModule(
             config['MAX_ITEM_LIST_LENGTH'] * config['hidden_size'], config['mlp_hidden_size'], model_list[0].n_items
@@ -1557,7 +1558,10 @@ class AttentionModuleTrainer(Trainer):
         train_last_layer_list, valid_last_layer_list = [], []
         train_scores_list, valid_scores_list = [], []
         train_item_list, valid_item_list = [], []
-        for task, (support_data, query_data) in iter_data:
+        selected = (torch.rand(len(iter_data)) <= self.construct_data_rate)
+        for i, (task, (support_data, query_data)) in enumerate(iter_data):
+            if not selected[i]:
+                continue
             self.fusion_model.load_checkpoint(init_checkpoint_list)
             train_last_layer, train_scores, train_item, valid_last_layer, valid_scores, valid_item = self.fit(
                 support_data, query_data, verbose=False, saved=saved, show_progress=False
