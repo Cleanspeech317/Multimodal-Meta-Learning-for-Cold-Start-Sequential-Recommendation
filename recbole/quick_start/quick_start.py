@@ -306,12 +306,12 @@ def run_meta_test(model=None, dataset=None, config_file_list=None, config_dict=N
 
 
 class AttentionDataset(Dataset):
-    def __init__(self, last_layer, scores, pos_items):
+    def __init__(self, last_layer, scores, pos_items, device):
         assert len(last_layer) == len(scores) == len(pos_items)
         self.length = len(last_layer)
-        self.last_layer = last_layer
-        self.scores = scores
-        self.pos_items = pos_items
+        self.last_layer = last_layer.to(device)
+        self.scores = scores.to(device)
+        self.pos_items = pos_items.to(device)
 
     def __getitem__(self, index):
         return self.last_layer[index], self.scores[index], self.pos_items[index]
@@ -365,8 +365,8 @@ def run_attention_fusion_train(
             test_data, meta_model_file=config['model_file'], show_progress=config['show_progress']
         )
 
-        train_attention_dataset = AttentionDataset(train_last_layer, train_scores, train_item)
-        valid_attention_dataset = AttentionDataset(valid_last_layer, valid_scores, valid_item)
+        train_attention_dataset = AttentionDataset(train_last_layer, train_scores, train_item, config['device'])
+        valid_attention_dataset = AttentionDataset(valid_last_layer, valid_scores, valid_item, config['device'])
         train_attention_dataloader = DataLoader(dataset=train_attention_dataset, batch_size=config['train_batch_size'])
         valid_attention_dataloader = DataLoader(dataset=valid_attention_dataset, batch_size=config['train_batch_size'])
         torch.save((train_attention_dataloader, valid_attention_dataloader), attention_data_path)
@@ -479,7 +479,7 @@ def run_emb_gen_train(model=None, dataset=None, config_file_list=None, config_di
     item_emb = model.item_embedding.generate_item_emb(torch.arange(dataset.item_num, device=config['device']))
     old_item_id = torch.from_numpy(np.unique(dataset.inter_feat[dataset.iid_field])).to(device=config['device'])
     mask = torch.ones(dataset.item_num, dtype=torch.bool, device=config['device'])
-    mask[old_item_id] = 0
+    mask[0] = mask[old_item_id] = 0
     mask = mask.unsqueeze(-1).expand_as(item_emb)
     checkpoint['state_dict']['item_embedding.weight'] = torch.where(
         mask, item_emb, checkpoint['state_dict']['item_embedding.weight']
