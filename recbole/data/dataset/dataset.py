@@ -200,6 +200,14 @@ class Dataset:
         self._filter_by_inter_num()
         self.config['user_inter_num_interval'] = old_user_inter_num_interval
         del self.inter_feat['first_inter_time']
+
+        user_remained_rate = self.config['user_remained_rate']
+        if data_source == 'up' and user_remained_rate is not None:
+            all_user = np.unique(self.inter_feat[self.uid_field].values)
+            remained_user_num = int(len(all_user) * user_remained_rate)
+            selected_user = np.random.choice(all_user, remained_user_num, replace=False)
+            selected_mask = self.inter_feat[self.uid_field].isin(selected_user)
+            self.inter_feat = self.inter_feat[selected_mask]
         self._reset_index()
 
     def _build_feat_name_list(self):
@@ -1544,6 +1552,14 @@ class Dataset:
         else:
             raise NotImplementedError(f'The splitting_method [{split_mode}] has not been implemented.')
 
+        if self.config['full_retain_time'] is not None:
+            split_time = self.config['full_retain_time']
+            train_dataset, valid_dataset, test_dataset = datasets
+            valid_mask = (valid_dataset.inter_feat[self.time_field] > split_time)
+            valid_dataset.inter_feat = valid_dataset.inter_feat[valid_mask]
+            test_mask = (test_dataset.inter_feat[self.time_field] > split_time)
+            test_dataset.inter_feat = test_dataset.inter_feat[test_mask]
+            return train_dataset, valid_dataset, test_dataset
         return datasets
 
     def save(self):
