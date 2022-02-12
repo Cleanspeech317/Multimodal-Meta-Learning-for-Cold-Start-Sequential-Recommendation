@@ -1,0 +1,17 @@
+# task_fields: ['cityid']
+task_fields: ['user_id']
+# meta_learning_task: ['1']
+# val_interval:
+#   cityid: ['1', '265', '361', '483']
+
+num_local_update: 2
+local_learner: adam
+local_learning_rate: 0.001
+local_weight_decay: 0.0
+# local_modules: ['item_embedding']
+# local_modules: ['item_embedding', 'position_embedding', 'trm_encoder', 'LayerNorm']
+local_modules: ['position_embedding', 'trm_encoder', 'LayerNorm']
+
+meta_epochs: 300
+stopping_step: 500
+# epochs: 30

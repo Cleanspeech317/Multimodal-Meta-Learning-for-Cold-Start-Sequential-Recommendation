@@ -1,0 +1,15 @@
+# model args
+embedding_size: 64
+step: 1
+loss_type: 'BPR'
+
+# data args
+# save_dataset: True
+# save_dataloaders: True
+load_col:
+    inter: [user_id, item_id, exposure_time]
+unused_col:
+    inter: [exposure_time, exposure_time_list]
+
+# eval args
+eval_batch_size: 4096

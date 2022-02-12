@@ -1,0 +1,27 @@
+model: GRU4Rec
+
+# model args
+embedding_size: 64
+hidden_size: 128
+num_layers: 1
+dropout_prob: 0.3
+loss_type: 'BPR'
+
+learning_rate: 1e-2
+learner: adam
+epochs: 100
+
+# data args
+data_source: down
+
+# save_dataset: True
+# save_dataloaders: True
+load_col:
+    # inter: [user_id, item_id, exposure_time, item_type_recommend]
+    inter: [user_id, item_id, exposure_time]
+unused_col:
+    # inter: [exposure_time, exposure_time_list, item_type_recommend, item_type_recommend_list]
+    inter: [exposure_time, exposure_time_list]
+
+# eval args
+eval_batch_size: 4096

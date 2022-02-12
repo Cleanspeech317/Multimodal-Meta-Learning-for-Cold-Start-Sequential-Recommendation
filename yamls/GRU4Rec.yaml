@@ -1,0 +1,15 @@
+# model args
+embedding_size: 64
+hidden_size: 128
+num_layers: 1
+dropout_prob: 0.3
+loss_type: 'BPR'
+
+# data args
+load_col:
+    inter: [user_id, item_id, exposure_time]
+unused_col:
+    inter: [exposure_time, exposure_time_list]
+
+# eval args
+eval_batch_size: 2048

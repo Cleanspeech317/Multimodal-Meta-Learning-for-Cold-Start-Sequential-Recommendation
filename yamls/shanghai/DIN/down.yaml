@@ -1,0 +1,28 @@
+model: DIN
+
+# model args
+embedding_size: 10
+mlp_hidden_size: [256,256,256]
+dropout_prob: 0
+pooling_mode: 'mean'
+
+# training args
+learning_rate: 1e-2
+learner: adam
+epochs: 100
+neg_sampling:
+  uniform: 1
+
+# data args
+data_source: down
+
+# save_dataset: True
+# save_dataloaders: True
+load_col:
+    inter: [user_id, item_id, exposure_time]
+    item: [item_id, txt_emb]
+unused_col:
+    inter: [exposure_time]
+
+# eval args
+eval_batch_size: 4096
