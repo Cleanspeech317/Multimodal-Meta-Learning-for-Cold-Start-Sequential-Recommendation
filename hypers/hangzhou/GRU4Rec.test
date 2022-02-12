@@ -1,0 +1,2 @@
+learning_rate choice [5e-3,1e-3,5e-4,1e-4]
+epochs choice [200,300,400,500]

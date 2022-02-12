@@ -1,0 +1,4 @@
+learning_rate choice [4e-3,3e-3,2e-3,1e-3]
+dropout_prob choice [0.3]
+num_layers choice [1]
+hidden_size choice [128]
