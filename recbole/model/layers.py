@@ -1282,14 +1282,10 @@ class SingleModalGenerator(nn.Module):
         self.item_neighbour_num = neighbour_num
         self.register_buffer('item_neighbour', item_neighbour[:, :self.item_neighbour_num])
 
-        self.proj_emb_size = proj_emb_size
-        self.proj = nn.Linear(self.attr_emb_size, self.proj_emb_size)
-        self.attention = nn.Linear(2 * self.proj_emb_size, 1)
-        self.leaky_relu = nn.LeakyReLU(leaky_slope)
+        self.proj = nn.Linear(self.attr_emb_size, self.hidden_size)
+        self.attention = nn.Linear(2 * self.hidden_size, 1)
         self.softmax = nn.Softmax(dim=-1)
-        self.elu = nn.ELU()
-        self.linear = nn.Linear(self.proj_emb_size, self.hidden_size)
-        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU()
         self.gamma = gamma
 
     def forward(self, item):  #  [B] or [B L]
@@ -1299,17 +1295,16 @@ class SingleModalGenerator(nn.Module):
         # all_item_attr_emb.shape = [B (K+1) E] or [B L (K+1) E]
         all_item_attr_emb = torch.cat([item_attr_emb.unsqueeze(-2), item_neighbour_attr_emb], dim=-2)
         all_item_proj_emb = self.proj(all_item_attr_emb)  # [B (K+1) e] or [B L (K+1) e]
-        item_proj_emb, _ = all_item_proj_emb.split([1, self.item_neighbour_num], dim=-2)  # [B 1 e] or [B L 1 e]
-        item_proj_emb = item_proj_emb.expand_as(all_item_proj_emb)  # [B (K+1) e] or [B L (K+1) e]
-        attention_emb = torch.cat([item_proj_emb, all_item_proj_emb], dim=-1)  # [B (K+1) 2e] or [B L (K+1) 2e]
-        attention_weight = self.attention(attention_emb).squeeze(-1)  # [B (K+1)] or [B L (K+1)]
-        attention_weight = self.leaky_relu(attention_weight)  # [B (K+1)] or [B L (K+1)]
-        attention_weight = self.softmax(attention_weight)  # [B (K+1)] or [B L (K+1)]
-        fusion_emb = (all_item_proj_emb * attention_weight.unsqueeze(-1)).sum(-2)  # [B e] or [B L e]
-        fusion_emb = self.elu(fusion_emb)  # [B e] or [B L e]
-        final_emb = self.linear(fusion_emb)  # [B E] or [B L E]
-        final_emb = self.gamma * self.tanh(final_emb)
-        return final_emb
+        item_proj_emb, item_neighbour_proj_emb = all_item_proj_emb.split([1, self.item_neighbour_num], dim=-2)
+        # item_proj_emb: [B 1 e] or [B L 1 e]; item_neighbour_proj_emb: [B K e] or [B L K e]
+        attention_emb = torch.cat([item_proj_emb.expand_as(item_neighbour_proj_emb), item_neighbour_proj_emb], dim=-1)
+        # attention_emb: [B K 2e] or [B L K 2e]
+        attention_weight = self.attention(attention_emb).squeeze(-1)  # [B K] or [B L K]
+        attention_weight = self.softmax(attention_weight)  # [B K] or [B L K]
+        fusion_emb = item_proj_emb.squeeze(-2) + (item_neighbour_proj_emb * attention_weight.unsqueeze(-1)).sum(-2)
+        # fusion_emb: [B e] or [B L e]
+        fusion_emb = self.relu(fusion_emb)  # [B e] or [B L e]
+        return fusion_emb
 
 
 class ItemGenerator(nn.Module):
