@@ -1,3 +1,0 @@
-learning_rate choice [1e-3,7e-4,5e-4,3e-4,2e-4,1e-4]
-n_layers choice [1,2,3]
-reg_weight choice [1e-05]
