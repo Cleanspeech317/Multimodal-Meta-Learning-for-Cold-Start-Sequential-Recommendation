@@ -32,4 +32,4 @@ bash script/print_result.sh
 ```
 
 ## Acknowledgement
-Our implementation is based on [RecBole](https://github.com/RUCAIBox/RecBole).
+Our implementation is based on [RecBole](https://github.com/RUCAIBox/RecBole) framework.
