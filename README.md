@@ -15,7 +15,10 @@ We purpose a Multimodal Meta-Learning (denoted as MML) method to introduce multi
 ## Reproducing
 We provide the script for reproducing the experimental results in this repository.
 For example, if you want to get the result for `hangzhou`, 
-you should put the data into `dataset/hangzhou` folder.
+you should firstly download the data files and put them into `dataset/hangzhou` folder.
+
+**NOTE: Due to privacy policies, our data is not availiable temporarily. We will make data masking and release the desensitized data after camera ready.**
+
 And then you can execute the following command:
 ```bash
 bash script/run_meta.sh hangzhou 0
@@ -27,3 +30,6 @@ You can execute the following command to get the result for our model.
 ```bash
 bash script/print_result.sh
 ```
+
+## Acknowledgement
+Our implementation is based on [RecBole](https://github.com/RUCAIBox/RecBole).
