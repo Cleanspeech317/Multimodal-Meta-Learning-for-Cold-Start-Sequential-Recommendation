@@ -11,3 +11,19 @@ We purpose a Multimodal Meta-Learning (denoted as MML) method to introduce multi
   <br>
   <b>Figure</b>: Overall Architecture of MML
 </p>
+
+## Reproducing
+We provide the script for reproducing the experimental results in this repository.
+For example, if you want to get the result for `hangzhou`, 
+you should put the data into `dataset/hangzhou` folder.
+And then you can execute the following command:
+```bash
+bash script/run_meta.sh hangzhou 0
+```
+`0` represent the GPU id to execute our code, you can change it as you need. 
+
+We also provide the script for showing the result in this repository.
+You can execute the following command to get the result for our model.
+```bash
+bash script/print_result.sh
+```
